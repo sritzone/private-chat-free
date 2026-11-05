@@ -74,14 +74,15 @@ def get_recent_messages(limit=150):
         result.append({
             "id": doc.id, "uid": m.get("uid", ""),
             "username": m.get("username", ""), "name": m.get("name", ""),
-            "text": m.get("text", ""), "ts": m.get("ts", 0), "kind": m.get("kind", "user")
+            "text": m.get("text", ""), "ts": m.get("ts", 0), "kind": m.get("kind", "user"), "avatar": m.get("avatar", "")
         })
     return list(reversed(result))
 
 def emit_presence():
     with online_lock:
         unique = {u["uid"]: {"id": u["uid"], "name": u["name"],
-                             "username": u["username"]} for u in online.values()}
+                             "username": u["username"], "avatar": u.get("avatar", "")}
+                   for u in online.values()}
     socketio.emit("presence_update", {"count": len(unique), "users": list(unique.values()),
                                       "call_active": bool(video_sids)})
 
@@ -160,11 +161,20 @@ def update_profile():
     if avatar and (not avatar.startswith("data:image/") or len(avatar) > 420000):
         return api_error("Profile image must be a compressed image under 300 KB")
     users.document(key).update({"avatar": avatar})
+    # Keep existing chat history avatars in sync with the current profile photo.
+    old_messages = list(messages.where("uid", "==", uid).stream())
+    for offset in range(0, len(old_messages), 400):
+        batch = db.batch()
+        for doc in old_messages[offset:offset + 400]:
+            batch.update(doc.reference, {"avatar": avatar})
+        batch.commit()
     profile["avatar"] = avatar
     with online_lock:
-        for user in online.values():
+        for sid, user in online.items():
             if user["uid"] == uid:
                 user["avatar"] = avatar
+                socketio.emit("profile_updated", {"id": uid, "name": user["name"],
+                              "username": user["username"], "avatar": avatar})
     return jsonify(me=public_user(uid, profile))
 
 @app.post("/api/logout")
@@ -263,7 +273,7 @@ def on_send_message(data):
         return
     message = {
         "uid": sender["uid"], "name": sender["name"],
-        "username": sender["username"], "text": text,
+        "username": sender["username"], "text": text, "avatar": sender.get("avatar", ""),
         "ts": int(time.time() * 1000)
     }
     ref = messages.document()
@@ -287,15 +297,17 @@ def join_video():
         system_call_message(f"📹 {starter} started a group video call.")
     emit("video_peers", {"peers": peers})
     with online_lock:
-        profiles = {sid: {"name": online.get(sid, {}).get("name", "Participant"),
+        profiles = {sid: {"uid": online.get(sid, {}).get("uid", ""),
+                          "name": online.get(sid, {}).get("name", "Participant"),
                           "avatar": online.get(sid, {}).get("avatar", "")} for sid in peers}
-        my_profile = {"name": online.get(request.sid, {}).get("name", "Participant"),
+        my_profile = {"uid": online.get(request.sid, {}).get("uid", ""),
+                      "name": online.get(request.sid, {}).get("name", "Participant"),
                       "avatar": online.get(request.sid, {}).get("avatar", "")}
     emit("video_peer_profiles", {"profiles": profiles})
     socketio.emit("call_status", {"active": True, "participants": len(video_sids),
                                   "started_by": call_started_by_name()})
     for sid in peers:
-        socketio.emit("video_peer_joined", {"sid": request.sid,
+        socketio.emit("video_peer_joined", {"sid": request.sid, "uid": my_profile["uid"],
                           "name": my_profile["name"], "avatar": my_profile["avatar"]}, to=sid)
 
 @socketio.on("leave_video")
