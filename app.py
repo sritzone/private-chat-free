@@ -31,13 +31,14 @@ messages = db.collection("chat_messages")
 online = {}  # Socket.IO sid -> user; one Render instance
 online_lock = threading.RLock()
 video_sids = set()
+call_started_at = None
 
 def username_key(value):
     return re.sub(r"\\s+", " ", str(value or "").strip()).casefold()
 
 def public_user(uid, profile):
     return {"id": uid, "name": profile.get("name", ""),
-            "username": profile.get("username", "")}
+            "username": profile.get("username", ""), "avatar": profile.get("avatar", "")}
 
 def resolve_token(token):
     token = str(token or "")
@@ -73,7 +74,7 @@ def get_recent_messages(limit=150):
         result.append({
             "id": doc.id, "uid": m.get("uid", ""),
             "username": m.get("username", ""), "name": m.get("name", ""),
-            "text": m.get("text", ""), "ts": m.get("ts", 0)
+            "text": m.get("text", ""), "ts": m.get("ts", 0), "kind": m.get("kind", "user")
         })
     return list(reversed(result))
 
@@ -81,7 +82,8 @@ def emit_presence():
     with online_lock:
         unique = {u["uid"]: {"id": u["uid"], "name": u["name"],
                              "username": u["username"]} for u in online.values()}
-    socketio.emit("presence_update", {"count": len(unique), "users": list(unique.values())})
+    socketio.emit("presence_update", {"count": len(unique), "users": list(unique.values()),
+                                      "call_active": bool(video_sids)})
 
 @app.get("/")
 def home():
@@ -147,6 +149,24 @@ def me():
         return api_error("Session expired. Please log in again.", 401)
     return jsonify(me=public_user(found[0], found[1]))
 
+@app.post("/api/profile")
+def update_profile():
+    d = request.get_json(silent=True) or {}
+    found = resolve_token(d.get("token"))
+    if not found:
+        return api_error("Session expired. Please log in again.", 401)
+    uid, profile, key = found
+    avatar = str(d.get("avatar") or "")
+    if avatar and (not avatar.startswith("data:image/") or len(avatar) > 420000):
+        return api_error("Profile image must be a compressed image under 300 KB")
+    users.document(key).update({"avatar": avatar})
+    profile["avatar"] = avatar
+    with online_lock:
+        for user in online.values():
+            if user["uid"] == uid:
+                user["avatar"] = avatar
+    return jsonify(me=public_user(uid, profile))
+
 @app.post("/api/logout")
 def logout():
     token = str((request.get_json(silent=True) or {}).get("token") or "")
@@ -211,6 +231,23 @@ def on_connect(auth=None):
         }
     emit("chat_history", {"messages": get_recent_messages()})
     emit_presence()
+    emit("call_status", {"active": bool(video_sids),
+                         "participants": len(video_sids),
+                         "started_by": call_started_by_name()})
+
+def call_started_by_name():
+    with online_lock:
+        if not video_sids:
+            return ""
+        sid = next(iter(video_sids))
+        return online.get(sid, {}).get("name", "A member")
+
+def system_call_message(text):
+    msg = {"uid": "system", "name": "SR Chat", "username": "system",
+           "text": text, "ts": int(time.time() * 1000), "kind": "system"}
+    ref = messages.document()
+    ref.set(msg)
+    socketio.emit("new_message", {"id": ref.id, **msg})
 
 @socketio.on("send_message")
 def on_send_message(data):
@@ -236,20 +273,48 @@ def on_send_message(data):
 # Group WebRTC signalling: peers exchange offers/answers/ICE through Socket.IO.
 @socketio.on("join_video")
 def join_video():
+    global call_started_at
     with online_lock:
         if request.sid not in online:
             return
+        was_empty = not video_sids
         video_sids.add(request.sid)
         peers = [sid for sid in video_sids if sid != request.sid]
+        starter = online.get(request.sid, {}).get("name", "A member")
+        if was_empty:
+            call_started_at = int(time.time() * 1000)
+    if was_empty:
+        system_call_message(f"📹 {starter} started a group video call.")
     emit("video_peers", {"peers": peers})
+    with online_lock:
+        profiles = {sid: {"name": online.get(sid, {}).get("name", "Participant"),
+                          "avatar": online.get(sid, {}).get("avatar", "")} for sid in peers}
+        my_profile = {"name": online.get(request.sid, {}).get("name", "Participant"),
+                      "avatar": online.get(request.sid, {}).get("avatar", "")}
+    emit("video_peer_profiles", {"profiles": profiles})
+    socketio.emit("call_status", {"active": True, "participants": len(video_sids),
+                                  "started_by": call_started_by_name()})
     for sid in peers:
-        socketio.emit("video_peer_joined", {"sid": request.sid}, to=sid)
+        socketio.emit("video_peer_joined", {"sid": request.sid,
+                          "name": my_profile["name"], "avatar": my_profile["avatar"]}, to=sid)
 
 @socketio.on("leave_video")
 def leave_video():
+    global call_started_at
     with online_lock:
+        was_in_call = request.sid in video_sids
         video_sids.discard(request.sid)
         peers = list(video_sids)
+        ended = was_in_call and not video_sids
+        user_name = online.get(request.sid, {}).get("name", "A member")
+        if ended:
+            call_started_at = None
+    if was_in_call and ended:
+        system_call_message(f"📴 {user_name} left. The group video call has ended.")
+    elif was_in_call:
+        system_call_message(f"👋 {user_name} left the group video call.")
+    socketio.emit("call_status", {"active": bool(peers), "participants": len(peers),
+                                  "started_by": call_started_by_name()})
     for sid in peers:
         socketio.emit("video_peer_left", {"sid": request.sid}, to=sid)
 
@@ -274,8 +339,14 @@ def on_disconnect():
         video_sids.discard(request.sid)
         peers = list(video_sids)
     if was_in_call:
+        if not peers:
+            system_call_message("📴 The group video call has ended.")
+        else:
+            system_call_message("A participant disconnected from the group video call.")
         for sid in peers:
             socketio.emit("video_peer_left", {"sid": request.sid}, to=sid)
+        socketio.emit("call_status", {"active": bool(peers), "participants": len(peers),
+                                      "started_by": call_started_by_name()})
     emit_presence()
 
 if __name__ == "__main__":
