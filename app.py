@@ -377,7 +377,7 @@ def on_react_message(data):
 
 # Group WebRTC signalling: peers exchange offers/answers/ICE through Socket.IO.
 @socketio.on("join_video")
-def join_video():
+def join_video(callback=None):
     global call_started_at
     current_user = current_socket_user()
     if not current_user:
@@ -406,7 +406,6 @@ def join_video():
         system_call_message(f"{starter} started the call")
     else:
         system_call_message(f"{starter} joined the call")
-    emit("video_peers", {"peers": peers})
     with online_lock:
         profiles = {sid: {"uid": online.get(sid, {}).get("uid", ""),
                           "name": online.get(sid, {}).get("name", "Participant"),
@@ -414,12 +413,17 @@ def join_video():
         my_profile = {"uid": online.get(request.sid, {}).get("uid", ""),
                       "name": online.get(request.sid, {}).get("name", "Participant"),
                       "avatar": online.get(request.sid, {}).get("avatar", "")}
-    emit("video_peer_profiles", {"profiles": profiles})
-    socketio.emit("call_status", {"active": True, "participants": len(video_sids),
-                                  "started_by": call_started_by_name()})
+        participant_count = len(video_sids)
+    # Notify already-connected participants that a new peer is present.
     for sid in peers:
         socketio.emit("video_peer_joined", {"sid": request.sid, "uid": my_profile["uid"],
                           "name": my_profile["name"], "avatar": my_profile["avatar"]}, to=sid)
+    socketio.emit("call_status", {"active": True, "participants": participant_count,
+                                  "started_by": call_started_by_name()})
+    result = {"ok": True, "peers": peers, "profiles": profiles,
+              "participant_count": participant_count}
+    if callable(callback):
+        callback(result)
 
 @socketio.on("leave_video")
 def leave_video():
