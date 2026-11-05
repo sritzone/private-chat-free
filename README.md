@@ -48,3 +48,10 @@ No Render persistent disk is needed for chat data. Firestore stores it.
 - Camera and microphone require HTTPS; Render provides HTTPS on its hosted URL.
 - This is a starter build, not a complete security audit. Before public launch add rate limiting, abuse prevention, moderation/admin tools, account recovery, privacy policy, and testing.
 - Existing SQLite data from the old ffx.py is not imported automatically.
+
+
+## v5 UI updates
+- Full-screen call overlay with exactly four controls: microphone, speaker, camera, end call.
+- One active call participant per account (duplicate account sessions are rejected).
+- Simple text call activity notes for start, join, leave, and end.
+- Message reactions and reply previews stored in Firestore.

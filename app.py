@@ -74,7 +74,9 @@ def get_recent_messages(limit=150):
         result.append({
             "id": doc.id, "uid": m.get("uid", ""),
             "username": m.get("username", ""), "name": m.get("name", ""),
-            "text": m.get("text", ""), "ts": m.get("ts", 0), "kind": m.get("kind", "user"), "avatar": m.get("avatar", "")
+            "text": m.get("text", ""), "ts": m.get("ts", 0), "kind": m.get("kind", "user"),
+            "avatar": m.get("avatar", ""), "reactions": m.get("reactions", {}),
+            "reply_to": m.get("reply_to")
         })
     return list(reversed(result))
 
@@ -237,7 +239,7 @@ def on_connect(auth=None):
     with online_lock:
         online[request.sid] = {
             "uid": uid, "name": profile.get("name", ""),
-            "username": profile.get("username", "")
+            "username": profile.get("username", ""), "avatar": profile.get("avatar", "")
         }
     emit("chat_history", {"messages": get_recent_messages()})
     emit_presence()
@@ -271,14 +273,40 @@ def on_send_message(data):
     if len(text) > 2000:
         emit("chat_error", {"error": "Message limit is 2000 characters"})
         return
+    reply_to = (data or {}).get("reply_to")
     message = {
         "uid": sender["uid"], "name": sender["name"],
         "username": sender["username"], "text": text, "avatar": sender.get("avatar", ""),
-        "ts": int(time.time() * 1000)
+        "ts": int(time.time() * 1000), "reactions": {},
+        "reply_to": reply_to if isinstance(reply_to, dict) else None
     }
     ref = messages.document()
     ref.set(message)
     socketio.emit("new_message", {"id": ref.id, **message})
+
+@socketio.on("react_message")
+def on_react_message(data):
+    data = data or {}
+    message_id = str(data.get("id") or "")
+    emoji = str(data.get("emoji") or "")
+    allowed = {"👍", "❤️", "😂", "😮", "😢", "🔥"}
+    with online_lock:
+        sender = online.get(request.sid)
+    if not sender or not message_id or emoji not in allowed:
+        return
+    ref = messages.document(message_id)
+    snap = ref.get()
+    if not snap.exists:
+        return
+    item = snap.to_dict() or {}
+    reactions = item.get("reactions") or {}
+    current = reactions.get(sender["uid"])
+    if current == emoji:
+        reactions.pop(sender["uid"], None)
+    else:
+        reactions[sender["uid"]] = emoji
+    ref.update({"reactions": reactions})
+    socketio.emit("message_reaction", {"id": message_id, "reactions": reactions})
 
 # Group WebRTC signalling: peers exchange offers/answers/ICE through Socket.IO.
 @socketio.on("join_video")
@@ -287,6 +315,10 @@ def join_video():
     with online_lock:
         if request.sid not in online:
             return
+        current_uid = online[request.sid]["uid"]
+        if any(online.get(sid, {}).get("uid") == current_uid for sid in video_sids):
+            emit("call_join_rejected", {"reason": "This account is already in the call on another device."})
+            return
         was_empty = not video_sids
         video_sids.add(request.sid)
         peers = [sid for sid in video_sids if sid != request.sid]
@@ -294,7 +326,9 @@ def join_video():
         if was_empty:
             call_started_at = int(time.time() * 1000)
     if was_empty:
-        system_call_message(f"📹 {starter} started a group video call.")
+        system_call_message(f"{starter} started the call")
+    else:
+        system_call_message(f"{starter} joined the call")
     emit("video_peers", {"peers": peers})
     with online_lock:
         profiles = {sid: {"uid": online.get(sid, {}).get("uid", ""),
@@ -321,10 +355,8 @@ def leave_video():
         user_name = online.get(request.sid, {}).get("name", "A member")
         if ended:
             call_started_at = None
-    if was_in_call and ended:
-        system_call_message(f"📴 {user_name} left. The group video call has ended.")
-    elif was_in_call:
-        system_call_message(f"👋 {user_name} left the group video call.")
+    if was_in_call:
+        system_call_message(f"{user_name} ended the call" if ended else f"{user_name} left the call")
     socketio.emit("call_status", {"active": bool(peers), "participants": len(peers),
                                   "started_by": call_started_by_name()})
     for sid in peers:
@@ -346,15 +378,13 @@ def webrtc_signal(data):
 @socketio.on("disconnect")
 def on_disconnect():
     with online_lock:
+        disconnected_name = online.get(request.sid, {}).get("name", "A participant")
         online.pop(request.sid, None)
         was_in_call = request.sid in video_sids
         video_sids.discard(request.sid)
         peers = list(video_sids)
     if was_in_call:
-        if not peers:
-            system_call_message("📴 The group video call has ended.")
-        else:
-            system_call_message("A participant disconnected from the group video call.")
+        system_call_message(f"{disconnected_name} ended the call" if not peers else f"{disconnected_name} left the call")
         for sid in peers:
             socketio.emit("video_peer_left", {"sid": request.sid}, to=sid)
         socketio.emit("call_status", {"active": bool(peers), "participants": len(peers),
