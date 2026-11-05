@@ -312,27 +312,42 @@ def system_call_message(text):
     socketio.emit("new_message", {"id": ref.id, **msg})
 
 @socketio.on("send_message")
-def on_send_message(data):
-    sender = current_socket_user()
-    if not sender:
-        emit("session_replaced", {"reason": "This account was signed in on another device."})
-        return
-    text = str((data or {}).get("text") or "").strip()
-    if not text:
-        return
-    if len(text) > 2000:
-        emit("chat_error", {"error": "Message limit is 2000 characters"})
-        return
-    reply_to = (data or {}).get("reply_to")
-    message = {
-        "uid": sender["uid"], "name": sender["name"],
-        "username": sender["username"], "text": text, "avatar": sender.get("avatar", ""),
-        "ts": int(time.time() * 1000), "reactions": {},
-        "reply_to": reply_to if isinstance(reply_to, dict) else None
-    }
-    ref = messages.document()
-    ref.set(message)
-    socketio.emit("new_message", {"id": ref.id, **message})
+def on_send_message(data, callback=None):
+    try:
+        sender = current_socket_user()
+        if not sender:
+            emit("session_replaced", {"reason": "This account was signed in on another device."})
+            if callable(callback):
+                callback({"ok": False, "error": "Session expired. Please sign in again."})
+            return
+        text = str((data or {}).get("text") or "").strip()
+        if not text:
+            if callable(callback):
+                callback({"ok": False, "error": "Message is empty."})
+            return
+        if len(text) > 2000:
+            if callable(callback):
+                callback({"ok": False, "error": "Message limit is 2000 characters."})
+            return
+        reply_to = (data or {}).get("reply_to")
+        message = {
+            "uid": sender["uid"], "name": sender["name"],
+            "username": sender["username"], "text": text,
+            "avatar": sender.get("avatar", ""),
+            "ts": int(time.time() * 1000), "reactions": {},
+            "reply_to": reply_to if isinstance(reply_to, dict) else None
+        }
+        ref = messages.document()
+        ref.set(message)  # Confirm Firestore persistence before acknowledging success.
+        payload = {"id": ref.id, **message}
+        socketio.emit("new_message", payload)
+        if callable(callback):
+            callback({"ok": True, "id": ref.id})
+    except Exception:
+        app.logger.exception("send_message failed")
+        if callable(callback):
+            callback({"ok": False, "error": "Message could not be saved. Check Firestore connection and try again."})
+        emit("chat_error", {"error": "Message could not be saved. Check Firestore connection and try again."})
 
 @socketio.on("react_message")
 def on_react_message(data):
