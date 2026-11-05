@@ -39,7 +39,7 @@ button,input{font:inherit}button{border:0;border-radius:12px;background:var(--bl
 .msg-actions .reacts{display:flex;gap:4px}.msg-actions .reacts button{padding:3px 6px}
 .reply-preview{padding:6px 9px;margin:0 0 7px;border-left:3px solid #69a3ff;background:#ffffff0a;border-radius:6px;color:#b8cce7;font-size:12px}
 .replying-to{display:none;padding:6px 12px;color:#a9c7ee;background:#142640;font-size:12px}
-@media(max-width:760px){#videoPanel{padding:calc(14px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom))!important}#videoPanel .video-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}#videoPanel .tile{aspect-ratio:4/5;min-height:125px;max-height:calc(100dvh - 180px)}#videoPanel .call-controls{gap:12px}#videoPanel .call-controls button{width:58px;height:58px;min-width:58px;max-width:58px;flex-basis:58px}}
+@media(max-width:760px){ #videoPanel{padding:calc(14px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom))!important}#videoPanel .video-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}#videoPanel .tile{aspect-ratio:4/5;min-height:125px;max-height:calc(100dvh - 180px)}#videoPanel .call-controls{gap:12px}#videoPanel .call-controls button{width:58px;height:58px;min-width:58px;max-width:58px;flex-basis:58px}}
 </style></head><body><main class="shell">
 <header class="top"><div class="brand"><div class="logo">SR</div><div><div class="title">{{ room_title }}</div><div class="sub" id="status">Private community · Secure sign in</div></div></div>
 <div class="actions" id="actions"><span class="online" id="active">0 active</span><button class="secondary" id="videoBtn">Start video call</button><button class="ghost" id="accountBtn">Account ▾</button></div></header>
