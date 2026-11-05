@@ -1,5 +1,6 @@
 Flask>=3.0,<4
 Flask-SocketIO>=5.3,<6
 simple-websocket>=1.0,<2
-gunicorn>=22,<27
+gunicorn>=22,<24
 firebase-admin>=6.5,<8
+Flask-Compress>=1.14,<2

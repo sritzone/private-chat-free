@@ -1,71 +1,41 @@
-# SR Private Chat — Firebase + Render Free
+# SR Private Chat — Flask + Socket.IO + Firebase
+
+Private group chat with video calls. Dark/light UI, responsive on desktop and mobile.
 
 ## Features
-- Register: Name, unique Username, Password
-- Login: Username and Password
-- Passwords stored as secure hashes (not plain text)
-- Firebase Firestore stores users, login sessions and chat messages
-- Live Socket.IO group chat and message history
-- Live online-user count
-- Account deletion with password confirmation; deletes that user's messages and sessions
-- Professional sign-in / registration experience with responsive chat layout
-- Responsive group-call panel for desktop and Android Chrome
-- Microphone, speaker and camera On/Off controls
-- Microphone permission and WebRTC connection status indicators
-- Remote participant audio playback with an explicit Enable sound action for mobile autoplay policies
-- Group video call using browser WebRTC mesh signalling
+- Register / sign in (hashed passwords, login rate-limit)
+- **One login per account** — signing in on another device (or opening a second tab) signs the old one out instantly; the old tab can click "Use here" to take it back
+- Real-time chat: replies, reactions, link detection, day separators, unread pill, members sidebar
+- **Group video call**: pre-join lobby (camera preview, mic/cam toggles), adaptive grid, picture-in-picture for 1-to-1, speaking highlight, mic/camera state shown to others, call timer, connection status, auto ICE-restart, "tap to enable sound" fallback, audio-only fallback when no camera
+- **Account page**: photo upload with preview, display name, change password, theme, delete account
+- Fast: in-memory auth/user/message caches, write-behind persistence, cached avatar images, gzip, vendored socket.io, WebSocket-first
 
 ## Firebase setup
-1. Create a Firebase project: https://console.firebase.google.com/
-2. Create Firestore Database in Native mode.
-3. Firebase Project settings -> Service Accounts -> Generate New Private Key.
-4. Keep the downloaded JSON private. Never upload it to a public GitHub repository.
-5. Copy the entire JSON content into Render's `FIREBASE_SERVICE_ACCOUNT_JSON` environment variable.
-6. `FIREBASE_PROJECT_ID` is optional if the service-account JSON already contains `project_id`.
-
-The Firebase Admin SDK runs on the server and bypasses Firestore Security Rules. Protect the service-account key and Render environment variables.
+1. Create a Firebase project and a Firestore database (Native mode).
+2. Project settings → Service accounts → Generate new private key. Keep it private.
+3. Put the whole JSON into the `FIREBASE_SERVICE_ACCOUNT_JSON` environment variable.
 
 ## Render deployment
-- Runtime: Python
-- Build command: `pip install -r requirements.txt`
-- Start command: `gunicorn --worker-class gthread --threads 100 --bind 0.0.0.0:$PORT app:app`
+- Build: `pip install -r requirements.txt`
+- Start: `gunicorn --worker-class gthread --threads 100 --workers 1 --bind 0.0.0.0:$PORT app:app`
+- **Keep exactly 1 worker/instance** (presence, calls and caches live in memory).
 
-Set these environment variables in Render:
-- `FIREBASE_SERVICE_ACCOUNT_JSON` = complete service account JSON
-- `SECRET_KEY` = long, random, stable secret
-- `FFX-G` = optional room title, e.g. SR Private Chat
-- `FIREBASE_PROJECT_ID` = optional project id
+Environment variables
+| Name | Purpose |
+|---|---|
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | required — service account JSON |
+| `SECRET_KEY` | long random string |
+| `ROOM_TITLE` | chat title (old `FFX-G` still works) |
+| `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL` | optional TURN server for calls on strict mobile/corporate networks |
 
-No Render persistent disk is needed for chat data. Firestore stores it.
+## Run locally without Firebase
+```
+pip install -r requirements.txt
+LOCAL_DEV=1 python app.py      # http://localhost:5000  (data is not saved)
+```
+Camera/mic need HTTPS (or `localhost`).
 
-## Important limitations
-- Firestore free quota limits apply; monitor usage and billing alerts.
-- Render Free services can sleep/restart. Firestore data persists, but online presence resets.
-- Active-user count is held in server memory and assumes one Render instance.
-- Group video is peer-to-peer mesh. It is intended for a small group; bandwidth/CPU usage increases with each participant.
-- Video uses public STUN servers only. Some mobile/corporate networks require a TURN server, so video/audio connectivity is not guaranteed on every network. If a peer connection stays on “checking” or “failed”, configure a TURN service (for example, a managed TURN provider) and add its credentials to `rtcConfig` in `templates/index.html`.
-- On Android Chrome, open the Render HTTPS URL, allow both Camera and Microphone permissions, join the call, then tap “Enable sound” if the browser blocks remote audio autoplay. Keep the tab open while calling.
-- Camera and microphone require HTTPS; Render provides HTTPS on its hosted URL.
-- This is a starter build, not a complete security audit. Before public launch add rate limiting, abuse prevention, moderation/admin tools, account recovery, privacy policy, and testing.
-- Existing SQLite data from the old ffx.py is not imported automatically.
-
-
-## v5 UI updates
-- Full-screen call overlay with exactly four controls: microphone, speaker, camera, end call.
-- One active call participant per account (duplicate account sessions are rejected).
-- Simple text call activity notes for start, join, leave, and end.
-- Message reactions and reply previews stored in Firestore.
-
-
-## v6 reliability fixes
-- A Firestore `active_session` lock now permits only the latest authenticated session for an account. Signing in on another device/browser invalidates the previous token; old sockets are rejected when they attempt chat/call actions.
-- WebRTC ICE candidates are queued until the remote description is ready, preventing early candidates from being silently dropped.
-- Optional TURN server configuration is supported for networks where STUN-only peer-to-peer calls cannot connect.
-
-### Optional TURN environment variables (recommended)
-Set these in Render if you have a TURN provider:
-- `TURN_URLS`: comma-separated TURN URLs, e.g. `turn:host:3478?transport=udp,turns:host:5349?transport=tcp`
-- `TURN_USERNAME`: TURN username
-- `TURN_CREDENTIAL`: TURN credential
-
-Without TURN, calls may still fail on restrictive mobile networks, carrier-grade NAT, or some Wi-Fi networks. STUN alone cannot guarantee connectivity.
+## Notes
+- Calls are peer-to-peer mesh: best for small groups (≤ 6). Without TURN some networks cannot connect.
+- Existing users, sessions and messages keep working. Old messages that stored avatars inside each message are cleaned up automatically (the avatar now comes from the user profile).
+- New usernames must start with a letter/number (Firestore does not allow ids like `__name__`).
