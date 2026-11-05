@@ -55,3 +55,17 @@ No Render persistent disk is needed for chat data. Firestore stores it.
 - One active call participant per account (duplicate account sessions are rejected).
 - Simple text call activity notes for start, join, leave, and end.
 - Message reactions and reply previews stored in Firestore.
+
+
+## v6 reliability fixes
+- A Firestore `active_session` lock now permits only the latest authenticated session for an account. Signing in on another device/browser invalidates the previous token; old sockets are rejected when they attempt chat/call actions.
+- WebRTC ICE candidates are queued until the remote description is ready, preventing early candidates from being silently dropped.
+- Optional TURN server configuration is supported for networks where STUN-only peer-to-peer calls cannot connect.
+
+### Optional TURN environment variables (recommended)
+Set these in Render if you have a TURN provider:
+- `TURN_URLS`: comma-separated TURN URLs, e.g. `turn:host:3478?transport=udp,turns:host:5349?transport=tcp`
+- `TURN_USERNAME`: TURN username
+- `TURN_CREDENTIAL`: TURN credential
+
+Without TURN, calls may still fail on restrictive mobile networks, carrier-grade NAT, or some Wi-Fi networks. STUN alone cannot guarantee connectivity.

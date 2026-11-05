@@ -28,7 +28,7 @@ db = get_firestore()
 users = db.collection("chat_users")
 sessions = db.collection("chat_sessions")
 messages = db.collection("chat_messages")
-online = {}  # Socket.IO sid -> user; one Render instance
+online = {}  # Socket.IO sid -> user; Firestore active_session enforces account lock across instances
 online_lock = threading.RLock()
 video_sids = set()
 call_started_at = None
@@ -54,13 +54,29 @@ def resolve_token(token):
     u = users.document(key).get()
     if not u.exists:
         return None
-    return uid, u.to_dict() or {}, key
+    profile = u.to_dict() or {}
+    # Only the most recently authenticated device/browser owns this account session.
+    if profile.get("active_session") != token:
+        return None
+    return uid, profile, key
 
 def make_session(uid, key):
     token = secrets.token_urlsafe(36)
-    sessions.document(token).set({
-        "uid": uid, "user_key": key, "created_at": int(time.time() * 1000)
-    })
+    user_ref = users.document(key)
+    session_ref = sessions.document(token)
+    tx = db.transaction()
+
+    @firestore.transactional
+    def replace_active_session(transaction):
+        snap = user_ref.get(transaction=transaction)
+        if not snap.exists:
+            raise ValueError("Account no longer exists")
+        transaction.update(user_ref, {"active_session": token})
+        transaction.set(session_ref, {
+            "uid": uid, "user_key": key, "created_at": int(time.time() * 1000)
+        })
+
+    replace_active_session(tx)
     return token
 
 def api_error(message, status=400):
@@ -90,7 +106,21 @@ def emit_presence():
 
 @app.get("/")
 def home():
-    return render_template("index.html", room_title=ROOM_TITLE)
+    turn_urls = os.environ.get("TURN_URLS", "").strip()
+    turn_username = os.environ.get("TURN_USERNAME", "").strip()
+    turn_credential = os.environ.get("TURN_CREDENTIAL", "").strip()
+    rtc_config = {
+        "iceServers": [
+            {"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}
+        ]
+    }
+    if turn_urls and turn_username and turn_credential:
+        rtc_config["iceServers"].append({
+            "urls": [u.strip() for u in turn_urls.split(",") if u.strip()],
+            "username": turn_username,
+            "credential": turn_credential
+        })
+    return render_template("index.html", room_title=ROOM_TITLE, rtc_config=rtc_config)
 
 @app.get("/health")
 def health():
@@ -183,7 +213,15 @@ def update_profile():
 def logout():
     token = str((request.get_json(silent=True) or {}).get("token") or "")
     if token:
-        sessions.document(token).delete()
+        snap = sessions.document(token).get()
+        if snap.exists:
+            key = (snap.to_dict() or {}).get("user_key")
+            if key:
+                ref = users.document(key)
+                user_snap = ref.get()
+                if user_snap.exists and (user_snap.to_dict() or {}).get("active_session") == token:
+                    ref.update({"active_session": firestore.DELETE_FIELD})
+            sessions.document(token).delete()
     return jsonify(ok=True)
 
 @app.post("/api/delete-account")
@@ -238,7 +276,8 @@ def on_connect(auth=None):
     uid, profile, _ = found
     with online_lock:
         online[request.sid] = {
-            "uid": uid, "name": profile.get("name", ""),
+            "uid": uid, "token": (auth or {}).get("token", ""),
+            "name": profile.get("name", ""),
             "username": profile.get("username", ""), "avatar": profile.get("avatar", "")
         }
     emit("chat_history", {"messages": get_recent_messages()})
@@ -254,6 +293,17 @@ def call_started_by_name():
         sid = next(iter(video_sids))
         return online.get(sid, {}).get("name", "A member")
 
+def current_socket_user(sid=None):
+    sid = sid or request.sid
+    with online_lock:
+        item = dict(online.get(sid) or {})
+    if not item:
+        return None
+    found = resolve_token(item.get("token"))
+    if not found or found[0] != item.get("uid"):
+        return None
+    return item
+
 def system_call_message(text):
     msg = {"uid": "system", "name": "SR Chat", "username": "system",
            "text": text, "ts": int(time.time() * 1000), "kind": "system"}
@@ -263,9 +313,9 @@ def system_call_message(text):
 
 @socketio.on("send_message")
 def on_send_message(data):
-    with online_lock:
-        sender = online.get(request.sid)
+    sender = current_socket_user()
     if not sender:
+        emit("session_replaced", {"reason": "This account was signed in on another device."})
         return
     text = str((data or {}).get("text") or "").strip()
     if not text:
@@ -290,9 +340,11 @@ def on_react_message(data):
     message_id = str(data.get("id") or "")
     emoji = str(data.get("emoji") or "")
     allowed = {"👍", "❤️", "😂", "😮", "😢", "🔥"}
-    with online_lock:
-        sender = online.get(request.sid)
-    if not sender or not message_id or emoji not in allowed:
+    sender = current_socket_user()
+    if not sender:
+        emit("session_replaced", {"reason": "This account was signed in on another device."})
+        return
+    if not message_id or emoji not in allowed:
         return
     ref = messages.document(message_id)
     snap = ref.get()
@@ -312,10 +364,18 @@ def on_react_message(data):
 @socketio.on("join_video")
 def join_video():
     global call_started_at
+    current_user = current_socket_user()
+    if not current_user:
+        emit("session_replaced", {"reason": "This account was signed in on another device."})
+        return
+    stale_video_sids = []
     with online_lock:
-        if request.sid not in online:
-            return
-        current_uid = online[request.sid]["uid"]
+        # Remove participants whose account session was replaced on another device.
+        for old_sid in list(video_sids):
+            if not current_socket_user(old_sid):
+                video_sids.discard(old_sid)
+                stale_video_sids.append(old_sid)
+        current_uid = current_user["uid"]
         if any(online.get(sid, {}).get("uid") == current_uid for sid in video_sids):
             emit("call_join_rejected", {"reason": "This account is already in the call on another device."})
             return
@@ -325,6 +385,8 @@ def join_video():
         starter = online.get(request.sid, {}).get("name", "A member")
         if was_empty:
             call_started_at = int(time.time() * 1000)
+    for old_sid in stale_video_sids:
+        socketio.emit("video_peer_left", {"sid": old_sid})
     if was_empty:
         system_call_message(f"{starter} started the call")
     else:
@@ -367,6 +429,9 @@ def webrtc_signal(data):
     data = data or {}
     target, kind = str(data.get("to") or ""), data.get("kind")
     if kind not in ("offer", "answer", "ice") or not target:
+        return
+    if not current_socket_user():
+        emit("session_replaced", {"reason": "This account was signed in on another device."})
         return
     with online_lock:
         if request.sid not in video_sids or target not in video_sids:
