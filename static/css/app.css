@@ -96,7 +96,8 @@ a{color:inherit}
 .side-head .logo{width:40px;height:40px;font-size:14px}
 .side-head b{display:block;font-size:16px;font-weight:600;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .side-head small{color:var(--muted);font-size:12.5px}
-.side-head .icon-btn{margin-left:auto;display:none}
+.side-head .icon-btn{display:none}
+.side-head .icon-btn.newgrp{display:inline-grid;margin-left:auto}.side-head #sideClose{margin-left:0}
 .logo.round{border-radius:50%;box-shadow:none}
 
 /* call row (like WhatsApp's "Calls" shortcut) */
@@ -131,7 +132,9 @@ a{color:inherit}
 .main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relative;background:var(--chat-bg)}
 .top{display:flex;align-items:center;gap:8px;padding:calc(8px + env(safe-area-inset-top)) 10px 8px 14px;background:var(--header);min-height:59px;z-index:3;position:relative}
 .top .menu{display:none}
-.top .grp{width:40px;height:40px;font-size:14px;margin-right:4px}
+.top .grp{display:inline-grid}
+.grp-btn{border:0;background:none;padding:0;display:inline-grid;border-radius:50%;margin-right:4px;flex:0 0 auto}.grp-btn:disabled{cursor:default}
+.top .meta{cursor:pointer}
 .top h1{font-size:16.5px;font-weight:600;margin:0;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .top .meta{min-width:0;flex:1}
 .status{font-size:13px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -157,10 +160,9 @@ html[data-theme=dark] .banner .btn{background:#04231d;color:#25d366}
 .empty .big{font-size:38px;margin-bottom:6px}
 .day-sep{display:flex;justify-content:center;margin:14px 0 6px}
 .day-sep span{font-size:12.5px;font-weight:500;color:var(--muted);background:var(--day-bg);padding:5px 12px;border-radius:8px;box-shadow:0 1px .5px rgba(11,20,26,.2)}
-.sys{align-self:center;margin:8px 0;max-width:92%;text-align:center}
-.sys>span{display:inline-flex;align-items:center;gap:7px;font-size:12.8px;color:var(--text-2);background:var(--day-bg);padding:5px 12px;border-radius:8px;box-shadow:0 1px .5px rgba(11,20,26,.2)}
-.sys.is-call>span{color:var(--brand-ink)}
-.sys .ico{font-size:15px}
+.sys{align-self:center;margin:5px 0;max-width:92%;text-align:center}
+.sys>span{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;line-height:1.4;color:var(--muted);background:none;padding:0;border:0;border-radius:0;box-shadow:none}
+.sys .ico{font-size:12px}
 
 .msg{display:flex;align-items:flex-start;gap:9px;max-width:min(82%,620px);margin-top:10px;position:relative;align-self:flex-start}
 .msg.cont{margin-top:2px}.msg.cont .avatar{visibility:hidden}
@@ -349,6 +351,7 @@ html[data-theme=light] .to-bottom{background:#fff}
   .sidebar{position:fixed;inset:0 auto 0 0;width:min(88vw,360px);z-index:40;transform:translateX(-104%);transition:transform .25s ease;box-shadow:var(--shadow)}
   .sidebar.open{transform:none}.sidebar.open~.scrim{opacity:1;pointer-events:auto}
   .side-head .icon-btn{display:inline-grid}.top .menu{display:inline-grid}
+  .top .me-btn{display:none}
 }
 @media (max-width:760px){
   body{font-size:15px}
@@ -380,3 +383,35 @@ html[data-theme=light] .to-bottom{background:#fff}
   .lobby{align-items:start}.preview{max-height:70dvh}
 }
 @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+/* ---------- chat list, welcome, groups, google ---------- */
+.chats{list-style:none;margin:0;padding:0;overflow:auto;flex:1;min-height:0}
+.chat-row{width:100%;display:flex;align-items:center;gap:13px;padding:9px 14px;border:0;background:transparent;text-align:left;color:inherit}
+.chat-row:hover{background:var(--surface-2)}.chat-row.on{background:var(--surface-3)}
+.cr-main{min-width:0;flex:1}
+.cr-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.cr-top b{font-size:16px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cr-top time{font-size:12px;color:var(--muted);flex:0 0 auto}
+.cr-bot{display:flex;align-items:center;gap:8px;margin-top:2px;min-height:22px}
+.cr-prev{flex:1;min-width:0;color:var(--muted);font-size:13.8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cr-call{flex:1;display:inline-flex;align-items:center;gap:6px;color:var(--brand-ink);font-size:13.5px;font-weight:600}
+.cr-call .ico{font-size:16px}
+.badge-n{min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--brand);color:#04231d;font-size:12px;font-weight:700;display:inline-grid;place-items:center;flex:0 0 auto}
+.chat-empty{padding:30px 22px;color:var(--muted);text-align:center;font-size:14px;line-height:1.6}
+.welcome{flex:1;display:grid;place-items:center;padding:24px;background-color:var(--chat-bg);background-image:var(--wall);background-size:160px}
+.w-card{max-width:420px;text-align:center;background:var(--surface);padding:34px 28px;border-radius:20px;box-shadow:var(--shadow)}
+.logo.big{width:72px;height:72px;font-size:24px;margin:0 auto 14px}
+.w-card h2{margin:0 0 6px;font-size:22px}.w-card p{color:var(--muted);margin:0 0 22px;line-height:1.6}
+.w-card .row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+.code-in{text-align:center;letter-spacing:.2em;font-weight:700;font-size:18px;text-transform:uppercase}
+.gi-head{display:flex;align-items:center;gap:14px;margin-bottom:14px}.gi-head h3{margin:0}.gi-head p{margin:2px 0 0;color:var(--muted)}
+.invite{background:var(--surface-2);border-radius:14px;padding:14px;text-align:center;margin-bottom:14px}
+.invite small{color:var(--muted)}.invite .code{font-size:26px;font-weight:800;letter-spacing:.18em;margin:4px 0 12px}
+.invite .row{display:flex;gap:8px;justify-content:center}
+.gi-members{list-style:none;margin:0 0 14px;padding:0;max-height:240px;overflow:auto}
+.gi-members li{display:flex;align-items:center;gap:12px;padding:7px 2px}
+.gi-members .wrap{position:relative;display:inline-flex}
+.gi-members .wrap.on::after{content:"";position:absolute;right:0;bottom:0;width:11px;height:11px;border-radius:50%;background:var(--ok);border:2px solid var(--surface)}
+.gi-members b{font-weight:500;display:block}.gi-members small{color:var(--muted)}
+.g-wrap{display:flex;justify-content:center;margin:20px 0 8px;min-height:44px}.g-wrap.busy{opacity:.55;pointer-events:none}
+.auth-card code{font-size:.9em;background:var(--surface-3);padding:1px 5px;border-radius:5px}

@@ -4,3 +4,5 @@ simple-websocket>=1.0,<2
 gunicorn>=22,<24
 firebase-admin>=6.5,<8
 Flask-Compress>=1.14,<2
+google-auth>=2.20,<3
+requests>=2.31,<3

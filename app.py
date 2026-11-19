@@ -7,8 +7,8 @@ Performance design
   * Avatars are served as cacheable images instead of being embedded in every message.
 
 Security design
-  * One active login per account: a new login or a new tab/device signs the old one out instantly.
-  * Login/registration rate limits, strict avatar validation, CSP and security headers.
+  * Google sign-in only (ID token verified on the server). One active login per account.
+  * Groups: private, joined with an invite code. Login/group rate limits, strict avatar validation, CSP and security headers.
 
 Run on a single worker/process (state is kept in memory).
 """
@@ -22,13 +22,14 @@ import re
 import secrets
 import threading
 import time
+import urllib.parse
+import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from flask import Flask, Response, g, jsonify, render_template, request, url_for
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from werkzeug.middleware.proxy_fix import ProxyFix
-from werkzeug.security import check_password_hash, generate_password_hash
 
 try:
     from flask_compress import Compress
@@ -45,6 +46,10 @@ AUTH_RECHECK = 300                           # seconds a verified token is trust
 HISTORY_SEND = 100                           # messages sent to a client on connect
 CACHE_LIMIT = 200                            # messages kept in memory
 MAX_AVATAR_BYTES = 300_000
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+DEV_LOGIN = os.environ.get("LOCAL_DEV") == "1" and not GOOGLE_CLIENT_ID   # local testing only
+MAX_GROUPS_OWNED, MAX_GROUPS_JOINED, MAX_MEMBERS = 10, 30, 50
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 REACTIONS = ("👍", "❤️", "😂", "😮", "😢", "🔥")
 SESSION_CODES = {
     "login_elsewhere": "You were signed out because this account signed in on another device.",
@@ -79,8 +84,9 @@ class MemoryStore:
 
     def __init__(self):
         self.lock = threading.RLock()
-        self.users, self.sessions, self.messages = {}, {}, {}
+        self.users, self.sessions, self.groups, self.gmsgs = {}, {}, {}, {}
 
+    # ---- users / sessions
     def get_user(self, key):
         with self.lock:
             u = self.users.get(key)
@@ -145,24 +151,59 @@ class MemoryStore:
             if u and u.get("active_session") == token:
                 u.pop("active_session", None)
 
-    def recent_messages(self, limit):
+    # ---- groups
+    def create_group(self, gid, doc):
         with self.lock:
-            rows = sorted(self.messages.values(), key=lambda m: m.get("ts", 0))[-limit:]
+            self.groups[gid] = {**doc, "members": list(doc.get("members") or [])}
+            self.gmsgs.setdefault(gid, {})
+
+    def all_groups(self):
+        with self.lock:
+            return [(k, {**v, "members": list(v["members"])}) for k, v in self.groups.items()]
+
+    def add_member(self, gid, uid):
+        with self.lock:
+            g = self.groups.get(gid)
+            if g and uid not in g["members"]:
+                g["members"].append(uid)
+
+    def remove_member(self, gid, uid):
+        with self.lock:
+            g = self.groups.get(gid)
+            if g and uid in g["members"]:
+                g["members"].remove(uid)
+
+    def update_group(self, gid, fields):
+        with self.lock:
+            if gid in self.groups:
+                self.groups[gid].update(fields)
+
+    def delete_group(self, gid):
+        with self.lock:
+            self.groups.pop(gid, None)
+            self.gmsgs.pop(gid, None)
+
+    # ---- messages (per group)
+    def recent_messages(self, gid, limit):
+        with self.lock:
+            rows = sorted(self.gmsgs.get(gid, {}).values(), key=lambda m: m.get("ts", 0))[-limit:]
             return [dict(m) for m in rows]
 
-    def add_message(self, mid, data):
+    def add_message(self, gid, mid, data):
         with self.lock:
-            self.messages[mid] = {"id": mid, **data}
+            self.gmsgs.setdefault(gid, {})[mid] = {"id": mid, **data}
 
-    def set_reactions(self, mid, reactions):
+    def set_reactions(self, gid, mid, reactions):
         with self.lock:
-            if mid in self.messages:
-                self.messages[mid]["reactions"] = dict(reactions)
+            m = self.gmsgs.get(gid, {}).get(mid)
+            if m is not None:
+                m["reactions"] = dict(reactions)
 
-    def delete_messages_by_uid(self, uid):
+    def delete_messages_by_uid(self, gid, uid):
         with self.lock:
-            for mid in [i for i, m in self.messages.items() if m.get("uid") == uid]:
-                self.messages.pop(mid, None)
+            box = self.gmsgs.get(gid, {})
+            for mid in [i for i, m in box.items() if m.get("uid") == uid]:
+                box.pop(mid, None)
 
 
 class FirestoreStore:
@@ -179,7 +220,7 @@ class FirestoreStore:
         self.db = firestore.client()
         self.users = self.db.collection("chat_users")
         self.sessions = self.db.collection("chat_sessions")
-        self.messages = self.db.collection("chat_messages")
+        self.groups = self.db.collection("chat_groups")      # chat_groups/{gid}/messages/{mid}
 
     def _eq(self, coll, field, value):
         try:
@@ -188,6 +229,10 @@ class FirestoreStore:
         except ImportError:
             return coll.where(field, "==", value)
 
+    def _msgs(self, gid):
+        return self.groups.document(gid).collection("messages")
+
+    # ---- users / sessions
     def get_user(self, key):
         s = self.users.document(key).get()
         return (s.to_dict() or {}) if s.exists else None
@@ -261,9 +306,30 @@ class FirestoreStore:
         if snap.exists and (snap.to_dict() or {}).get("active_session") == token:
             self.users.document(key).update({"active_session": self.fs.DELETE_FIELD})
 
-    def recent_messages(self, limit):
+    # ---- groups
+    def create_group(self, gid, doc):
+        self.groups.document(gid).set(doc)
+
+    def all_groups(self):
+        return [(d.id, d.to_dict() or {}) for d in self.groups.stream()]
+
+    def add_member(self, gid, uid):
+        self.groups.document(gid).update({"members": self.fs.ArrayUnion([uid])})
+
+    def remove_member(self, gid, uid):
+        self.groups.document(gid).update({"members": self.fs.ArrayRemove([uid])})
+
+    def update_group(self, gid, fields):
+        self.groups.document(gid).update(fields)
+
+    def delete_group(self, gid):
+        self._batch_delete(self._msgs(gid).stream())
+        self.groups.document(gid).delete()
+
+    # ---- messages (per group, no composite index needed)
+    def recent_messages(self, gid, limit):
         out = []
-        q = self.messages.order_by("ts", direction=self.fs.Query.DESCENDING).limit(limit)
+        q = self._msgs(gid).order_by("ts", direction=self.fs.Query.DESCENDING).limit(limit)
         for d in q.stream():
             m = d.to_dict() or {}
             m["id"] = d.id
@@ -271,14 +337,14 @@ class FirestoreStore:
         out.reverse()
         return out
 
-    def add_message(self, mid, data):
-        self.messages.document(mid).set(data)
+    def add_message(self, gid, mid, data):
+        self._msgs(gid).document(mid).set(data)
 
-    def set_reactions(self, mid, reactions):
-        self.messages.document(mid).update({"reactions": reactions})
+    def set_reactions(self, gid, mid, reactions):
+        self._msgs(gid).document(mid).update({"reactions": reactions})
 
-    def delete_messages_by_uid(self, uid):
-        self._batch_delete(self._eq(self.messages, "uid", uid).stream())
+    def delete_messages_by_uid(self, gid, uid):
+        self._batch_delete(self._eq(self._msgs(gid), "uid", uid).stream())
 
 
 def build_store():
@@ -351,7 +417,7 @@ class Limiter:
             self.h.pop(key, None)
 
 
-login_gate, reg_gate, me_gate, pw_gate, chat_gate = Limiter(), Limiter(), Limiter(), Limiter(), Limiter()
+login_gate, me_gate, chat_gate, group_gate, join_gate = Limiter(), Limiter(), Limiter(), Limiter(), Limiter()
 
 # --------------------------------------------------------------------------- directory (users + avatars)
 directory = {}          # uid -> info
@@ -480,130 +546,253 @@ def revoke_account_tokens(key):
             tokens.pop(old, None)
 
 
-# --------------------------------------------------------------------------- messages cache
-recent = collections.deque()
-recent_by_id = {}
-recent_lock = threading.RLock()
+# --------------------------------------------------------------------------- groups + message cache
+groups = {}                                    # gid -> {"id","name","code","owner","members":[uid],"created_at"}
+group_by_code = {}                             # invite code -> gid
+user_groups = collections.defaultdict(set)     # uid -> {gid}
+groups_lock = threading.RLock()
+gmsgs = {}                                     # gid -> {"recent": deque, "by_id": {}, "loaded": bool, "lock": RLock}
 
 
-def cache_add(m):
-    with recent_lock:
-        if len(recent) >= CACHE_LIMIT:
-            recent_by_id.pop(recent.popleft()["id"], None)
-        recent.append(m)
-        recent_by_id[m["id"]] = m
+def room(gid):
+    return "g:" + gid
 
 
-def cache_remove(mid):
-    with recent_lock:
-        m = recent_by_id.pop(mid, None)
+def new_code():
+    while True:
+        c = "".join(secrets.choice(CODE_ALPHABET) for _ in range(8))
+        if c not in group_by_code:
+            return c
+
+
+def register_group(gid, doc):
+    g = {"id": gid, "name": doc.get("name", "Group"), "code": doc.get("code", ""), "owner": doc.get("owner", ""),
+         "members": list(doc.get("members") or []), "created_at": doc.get("created_at", 0)}
+    with groups_lock:
+        groups[gid] = g
+        if g["code"]:
+            group_by_code[g["code"]] = gid
+        for u in g["members"]:
+            user_groups[u].add(gid)
+    return g
+
+
+def member_add(gid, uid):
+    store.add_member(gid, uid)
+    with groups_lock:
+        g = groups[gid]
+        if uid not in g["members"]:
+            g["members"].append(uid)
+        user_groups[uid].add(gid)
+
+
+def member_remove(gid, uid):
+    """Remove uid from a group. Empty groups are deleted; ownership passes on. True if the group still exists."""
+    with groups_lock:
+        g = groups.get(gid)
+        if not g:
+            return False
+        members = [m for m in g["members"] if m != uid]
+        owner = g["owner"]
+    if not members:
+        store.delete_group(gid)
+        with groups_lock:
+            groups.pop(gid, None)
+            group_by_code.pop(g["code"], None)
+            user_groups[uid].discard(gid)
+            gmsgs.pop(gid, None)
+        return False
+    store.remove_member(gid, uid)
+    new_owner = members[0] if owner == uid else owner
+    if new_owner != owner:
+        store.update_group(gid, {"owner": new_owner})
+    with groups_lock:
+        g["members"], g["owner"] = members, new_owner
+        user_groups[uid].discard(gid)
+    return True
+
+
+def gbucket(gid):
+    with groups_lock:
+        b = gmsgs.get(gid)
+        if b is None:
+            b = gmsgs[gid] = {"recent": collections.deque(), "by_id": {}, "loaded": False, "lock": threading.RLock()}
+    return b
+
+
+def _put(b, m):
+    if m["id"] in b["by_id"]:
+        return
+    if len(b["recent"]) >= CACHE_LIMIT:
+        b["by_id"].pop(b["recent"].popleft()["id"], None)
+    b["recent"].append(m)
+    b["by_id"][m["id"]] = m
+
+
+def ensure_loaded(gid):
+    b = gbucket(gid)
+    if b["loaded"]:
+        return b
+    with b["lock"]:
+        if not b["loaded"]:
+            try:
+                for m in store.recent_messages(gid, CACHE_LIMIT):
+                    _put(b, m)
+                b["loaded"] = True
+            except Exception:
+                log.exception("loading messages for group %s failed", gid)
+    return b
+
+
+def cache_add(gid, m):
+    b = ensure_loaded(gid)
+    with b["lock"]:
+        _put(b, m)
+
+
+def cache_remove(gid, mid):
+    b = gbucket(gid)
+    with b["lock"]:
+        m = b["by_id"].pop(mid, None)
         if m is not None:
             try:
-                recent.remove(m)
+                b["recent"].remove(m)
             except ValueError:
                 pass
 
 
-def cache_remove_uid(uid):
-    with recent_lock:
-        keep = [m for m in recent if m.get("uid") != uid]
-        recent.clear()
-        recent_by_id.clear()
+def cache_remove_uid(gid, uid):
+    b = gbucket(gid)
+    with b["lock"]:
+        keep = [m for m in b["recent"] if m.get("uid") != uid]
+        b["recent"].clear()
+        b["by_id"].clear()
         for m in keep:
-            recent.append(m)
-            recent_by_id[m["id"]] = m
+            _put(b, m)
 
 
-def msg_out(m):
+def msg_out(gid, m):
     uid = m.get("uid", "")
     info = directory.get(uid) if uid != "system" else None
     src = info or m
-    return {"id": m["id"], "uid": uid, "name": src.get("name", ""), "username": src.get("username", ""),
+    return {"id": m["id"], "gid": gid, "uid": uid, "name": src.get("name", ""), "username": src.get("username", ""),
             "text": m.get("text", ""), "ts": m.get("ts", 0), "kind": m.get("kind", "user"),
             "avatar": avatar_url(uid) if info else "", "reactions": m.get("reactions") or {},
             "reply_to": m.get("reply_to")}
 
 
-def history_payload():
-    with recent_lock:
-        rows = list(recent)[-HISTORY_SEND:]
-    return [msg_out(m) for m in rows]
+def history_payload(gid):
+    b = ensure_loaded(gid)
+    with b["lock"]:
+        rows = list(b["recent"])[-HISTORY_SEND:]
+    return [msg_out(gid, m) for m in rows]
+
+
+def last_preview(gid):
+    b = ensure_loaded(gid)
+    with b["lock"]:
+        m = b["recent"][-1] if b["recent"] else None
+    if not m:
+        return None
+    return {"text": str(m.get("text", ""))[:80], "name": m.get("name", ""), "uid": m.get("uid", ""), "ts": m.get("ts", 0), "kind": m.get("kind", "user")}
 
 
 # --------------------------------------------------------------------------- realtime state
 online = {}             # sid -> {"uid","token"}
 online_lock = threading.RLock()
-video_sids = set()
-video_media = {}        # sid -> {"mic","cam"}
-call_started_at = None
+calls = {}              # gid -> {"sids": set, "media": {sid: {"mic","cam"}}, "started": ms, "starter": uid}
+sid_call = {}           # sid -> gid  (a socket is in at most one call)
 
 
-def peer_profile(sid):
+def call_payload(gid):
+    with online_lock:
+        c = calls.get(gid)
+        if not c or not c["sids"]:
+            return {"active": False, "participants": 0, "started_by": "", "started_at": 0, "uids": []}
+        uids = [(online.get(s) or {}).get("uid") for s in c["sids"]]
+        starter, started = c.get("starter"), c.get("started") or 0
+    return {"active": True, "participants": len(uids), "started_at": started,
+            "started_by": (directory.get(starter) or {}).get("name", "A member"), "uids": [u for u in uids if u]}
+
+
+def group_public(gid):
+    g = groups[gid]
+    members = []
+    for uid in g["members"]:
+        info = directory.get(uid) or info_for(uid)
+        if info:
+            members.append({"id": uid, "name": info["name"], "username": info["username"], "avatar": avatar_url(uid)})
+    with online_lock:
+        on = {u["uid"] for u in online.values()}
+    return {"id": gid, "name": g["name"], "code": g["code"], "owner": g["owner"], "created_at": g["created_at"],
+            "members": members, "online": [u for u in g["members"] if u in on],
+            "call": call_payload(gid), "last": last_preview(gid)}
+
+
+def emit_group(gid):
+    if gid in groups:
+        socketio.emit("group_updated", group_public(gid), to=room(gid))
+
+
+def emit_group_presence(gid):
+    g = groups.get(gid)
+    if not g:
+        return
+    with online_lock:
+        on = {u["uid"] for u in online.values()}
+    socketio.emit("group_presence", {"gid": gid, "online": [u for u in g["members"] if u in on],
+                                     "call": call_payload(gid)}, to=room(gid))
+
+
+def emit_user_presence(uid):
+    for gid in list(user_groups.get(uid, ())):
+        emit_group_presence(gid)
+
+
+def peer_profile(sid, gid):
     uid = (online.get(sid) or {}).get("uid", "")
     info = directory.get(uid) or {}
-    st = video_media.get(sid) or {}
+    st = ((calls.get(gid) or {}).get("media") or {}).get(sid) or {}
     return {"uid": uid, "name": info.get("name", "Participant"), "avatar": avatar_url(uid),
             "mic": st.get("mic", True), "cam": st.get("cam", True)}
 
 
-def emit_presence():
-    with online_lock:
-        in_call = {online[s]["uid"] for s in video_sids if s in online}
-        uids = list({u["uid"] for u in online.values()})
-        call_active = bool(video_sids)
-    users = []
-    for uid in uids:
-        info = directory.get(uid)
-        if info:
-            users.append({"id": uid, "name": info["name"], "username": info["username"],
-                          "avatar": avatar_url(uid), "in_call": uid in in_call})
-    users.sort(key=lambda u: u["name"].lower())
-    socketio.emit("presence_update", {"count": len(users), "users": users, "call_active": call_active})
-
-
-def call_status_payload():
-    with online_lock:
-        sids = list(video_sids)
-        first = (online.get(sids[0]) or {}).get("uid") if sids else None
-        started = call_started_at
-    return {"active": bool(sids), "participants": len(sids),
-            "started_by": (directory.get(first) or {}).get("name", "A member") if first else "",
-            "started_at": started or 0}
-
-
-def emit_call_status():
-    socketio.emit("call_status", call_status_payload())
-
-
-def system_message(text):
+def system_message(gid, text):
     m = {"id": secrets.token_hex(10), "uid": "system", "name": "SR Chat", "username": "system",
          "text": text, "ts": now_ms(), "kind": "system"}
-    cache_add(m)
-    socketio.emit("new_message", msg_out(m))
-    run_bg(io_pool, store.add_message, m["id"], {k: v for k, v in m.items() if k != "id"})
+    cache_add(gid, m)
+    socketio.emit("new_message", msg_out(gid, m), to=room(gid))
+    run_bg(io_pool, store.add_message, gid, m["id"], {k: v for k, v in m.items() if k != "id"})
 
 
-def _announce_leave(sid, name, peers):
-    global call_started_at
-    ended = not peers
-    if ended:
-        call_started_at = None
-    system_message("%s ended the call" % name if ended else "%s left the call" % name)
+def leave_call(sid, uid):
+    """Take a socket out of its call (if any) and tell the group. Safe to call twice."""
+    with online_lock:
+        gid = sid_call.pop(sid, None)
+        if not gid:
+            return False
+        c = calls.get(gid)
+        peers = []
+        if c:
+            c["sids"].discard(sid)
+            c["media"].pop(sid, None)
+            peers = list(c["sids"])
+            if not peers:
+                calls.pop(gid, None)
+    name = (directory.get(uid) or {}).get("name", "A member")
+    if gid in groups:
+        system_message(gid, "%s ended the call" % name if not peers else "%s left the call" % name)
     for p in peers:
-        socketio.emit("video_peer_left", {"sid": sid}, to=p)
-    emit_call_status()
+        socketio.emit("video_peer_left", {"sid": sid, "gid": gid}, to=p)
+    emit_group_presence(gid)
+    return True
 
 
 def drop_sid(sid):
     """Forget a socket and leave any call. Safe to call more than once."""
     with online_lock:
         user = online.pop(sid, None)
-        was_in_call = sid in video_sids
-        video_sids.discard(sid)
-        video_media.pop(sid, None)
-        peers = list(video_sids)
-    if was_in_call:
-        _announce_leave(sid, (directory.get((user or {}).get("uid")) or {}).get("name", "A member"), peers)
+    leave_call(sid, (user or {}).get("uid"))
     return user
 
 
@@ -621,7 +810,7 @@ def kick_account(uid, code, except_sid=None):
                 socketio.server.disconnect(sid, namespace="/")
             except Exception:
                 log.debug("disconnect failed", exc_info=True)
-        emit_presence()
+        emit_user_presence(uid)
 
 
 def current_socket_user():
@@ -635,6 +824,13 @@ def current_socket_user():
         socketio.emit("session_replaced", {"code": "login_elsewhere", "reason": SESSION_CODES["login_elsewhere"]}, to=sid)
         return None
     return item
+
+
+def member_gid(sender, data):
+    """The group id in `data`, only if the sender belongs to that group."""
+    gid = str((data or {}).get("gid") or "")[:40]
+    g = groups.get(gid)
+    return gid if g and sender["uid"] in g["members"] else None
 
 
 # --------------------------------------------------------------------------- HTTP helpers
@@ -691,8 +887,10 @@ def add_headers(resp):
         nonce = g.get("nonce")
         if nonce:
             resp.headers["Content-Security-Policy"] = (
-                "default-src 'self'; script-src 'self' 'nonce-%s'; style-src 'self' 'unsafe-inline'; "
-                "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; "
+                "default-src 'self'; script-src 'self' 'nonce-%s' https://accounts.google.com/gsi/client; "
+                "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; "
+                "img-src 'self' data: blob:; media-src 'self' blob:; "
+                "connect-src 'self' ws: wss: https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; "
                 "font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" % nonce)
     return resp
 
@@ -701,7 +899,8 @@ def add_headers(resp):
 @app.get("/")
 def home():
     g.nonce = secrets.token_urlsafe(12)
-    boot = {"title": ROOM_TITLE, "rtc": rtc_config(), "reactions": list(REACTIONS)}
+    boot = {"title": ROOM_TITLE, "rtc": rtc_config(), "reactions": list(REACTIONS),
+            "google_client_id": GOOGLE_CLIENT_ID, "dev_login": DEV_LOGIN}
     return render_template("index.html", room_title=ROOM_TITLE, boot=boot, nonce=g.nonce)
 
 
@@ -726,52 +925,88 @@ def avatar(uid):
     return resp
 
 
-@app.post("/api/register")
-def register():
-    ip = request.remote_addr or "?"
-    if not reg_gate.hit(ip, 10, 3600):
-        return api_error("Too many sign-ups from this network. Please try again later.", 429)
-    d = body()
-    name = clean_spaces(d.get("name"))
-    username = str(d.get("username") or "").strip()
-    password = str(d.get("password") or "")
-    if not name or len(name) > 40:
-        return api_error("Name is required (maximum 40 characters)")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.]{2,19}", username):
-        return api_error("Username must be 3-20 characters, start with a letter or number, and use only letters, numbers, _ or .")
-    if len(password) < 6 or len(password) > 128:
-        return api_error("Password must be 6 to 128 characters")
-    key = username_key(username)
-    uid = uuid.uuid4().hex
-    profile = {"uid": uid, "name": name, "username": username,
-               "password_hash": generate_password_hash(password), "created_at": now_ms()}
-    if not store.create_user(key, profile):
-        return api_error("That username is already taken")
-    dir_put(key, profile)
-    token = make_session(uid, key)
-    return jsonify(token=token, me=public_user(uid))
+_g_request = None
 
 
-@app.post("/api/login")
-def login():
-    d = body()
-    username = str(d.get("username") or "").strip()[:40]
-    password = str(d.get("password") or "")[:128]
-    if not username or not password:
-        return api_error("Enter your username and password")
-    key = username_key(username)
-    gate = "%s|%s" % (request.remote_addr, key)
-    if not login_gate.peek(gate, 6, 300):
-        return api_error("Too many attempts. Please wait a few minutes and try again.", 429)
+def verify_google(credential):
+    """Verify a Google Identity Services ID token and return its claims."""
+    global _g_request
+    from google.auth.transport import requests as g_requests
+    from google.oauth2 import id_token
+    if _g_request is None:
+        _g_request = g_requests.Request()
+    info = id_token.verify_oauth2_token(credential, _g_request, GOOGLE_CLIENT_ID)
+    if info.get("iss") not in ("accounts.google.com", "https://accounts.google.com"):
+        raise ValueError("bad issuer")
+    if not info.get("email_verified"):
+        raise ValueError("email not verified")
+    return info
+
+
+def fetch_google_avatar(url):
+    """Best-effort copy of the Google profile photo (validated like any uploaded avatar)."""
+    try:
+        u = urllib.parse.urlparse(url)
+        if u.scheme != "https" or not (u.hostname or "").endswith(".googleusercontent.com"):
+            return ""
+        req = urllib.request.Request(url, headers={"User-Agent": "sr-chat"})
+        with urllib.request.urlopen(req, timeout=4) as r:
+            raw = r.read(MAX_AVATAR_BYTES + 1)
+            mime = r.headers.get_content_type()
+        if mime not in ("image/jpeg", "image/png", "image/webp"):
+            return ""
+        data_url = "data:%s;base64,%s" % (mime, base64.b64encode(raw).decode())
+        return data_url if decode_avatar(data_url) else ""
+    except Exception:
+        return ""
+
+
+def finish_login(key, name, username, email="", picture=""):
     prof = store.get_user(key)
-    if not prof or not check_password_hash(prof.get("password_hash", ""), password):
-        login_gate.add(gate)
-        return api_error("Incorrect username or password", 401)
-    login_gate.clear(gate)
+    if not prof:
+        prof = {"uid": uuid.uuid4().hex, "name": name[:40] or "Member", "username": username, "email": email,
+                "created_at": now_ms()}
+        avatar_data = fetch_google_avatar(picture) if picture else ""
+        if avatar_data:
+            prof["avatar"] = avatar_data
+        if not store.create_user(key, prof):
+            prof = store.get_user(key) or prof
     uid = prof.get("uid") or key
     dir_put(key, prof)
     token = make_session(uid, key)
     return jsonify(token=token, me=public_user(uid))
+
+
+@app.post("/api/google")
+def google_login():
+    if not login_gate.hit("g|" + (request.remote_addr or "?"), 20, 300):
+        return api_error("Too many attempts. Please wait a few minutes and try again.", 429)
+    if not GOOGLE_CLIENT_ID:
+        return api_error("Google sign-in is not configured on this server.", 503)
+    cred = str(body().get("credential") or "")
+    if not cred or len(cred) > 4096:
+        return api_error("Google sign-in failed. Please try again.", 401)
+    try:
+        info = verify_google(cred)
+    except Exception as exc:
+        log.info("google token rejected: %s", exc)
+        return api_error("Google sign-in failed. Please try again.", 401)
+    email = str(info.get("email") or "")
+    handle = re.sub(r"[^A-Za-z0-9_.]", "", email.split("@")[0])[:20] or "member"
+    name = clean_spaces(info.get("name")) or handle
+    return finish_login("g_" + str(info["sub"]), name, "", email, str(info.get("picture") or ""))
+
+
+@app.post("/api/dev-login")
+def dev_login():
+    """Local testing only (LOCAL_DEV=1 and no GOOGLE_CLIENT_ID). Never available in production."""
+    if not DEV_LOGIN:
+        return api_error("Not found", 404)
+    name = clean_spaces(body().get("name"))[:40]
+    slug = re.sub(r"[^a-z0-9]", "", name.casefold())[:30]
+    if not slug:
+        return api_error("Enter a name")
+    return finish_login("dev_" + slug, name, slug[:20])
 
 
 @app.post("/api/me")
@@ -780,7 +1015,7 @@ def me():
         return api_error("Too many requests", 429)
     e = resolve_token(body().get("token"))
     if not e or e["uid"] not in directory:
-        return api_error("Session expired. Please log in again.", 401)
+        return api_error("Session expired. Please sign in again.", 401)
     return jsonify(me=public_user(e["uid"]))
 
 
@@ -789,7 +1024,7 @@ def update_profile():
     d = body()
     e = resolve_token(d.get("token"))
     if not e:
-        return api_error("Session expired. Please log in again.", 401)
+        return api_error("Session expired. Please sign in again.", 401)
     uid, key = e["uid"], e["key"]
     info = directory.get(uid) or info_for(uid)
     if not info:
@@ -816,28 +1051,10 @@ def update_profile():
             parsed = decode_avatar(fields["avatar"])
             info["avatar_mime"], info["avatar_raw"] = parsed if parsed else (None, None)
             info["avatar_ver"] = hashlib.sha1(info["avatar_raw"]).hexdigest()[:10] if parsed else ""
-    socketio.emit("profile_updated", {"id": uid, "name": info["name"], "username": info["username"],
-                                      "avatar": avatar_url(uid)})
-    emit_presence()
+    payload = {"id": uid, "name": info["name"], "username": info["username"], "avatar": avatar_url(uid)}
+    for gid in list(user_groups.get(uid, ())):
+        socketio.emit("profile_updated", payload, to=room(gid))
     return jsonify(me=public_user(uid))
-
-
-@app.post("/api/password")
-def change_password():
-    d = body()
-    e = resolve_token(d.get("token"))
-    if not e:
-        return api_error("Session expired. Please log in again.", 401)
-    if not pw_gate.hit("pw|" + e["uid"], 6, 600):
-        return api_error("Too many attempts. Please wait a few minutes.", 429)
-    current, new = str(d.get("current") or "")[:128], str(d.get("new") or "")
-    if len(new) < 6 or len(new) > 128:
-        return api_error("New password must be 6 to 128 characters")
-    prof = store.get_user(e["key"])
-    if not prof or not check_password_hash(prof.get("password_hash", ""), current):
-        return api_error("Current password is incorrect", 401)
-    store.update_user(e["key"], {"password_hash": generate_password_hash(new)})
-    return jsonify(ok=True)
 
 
 @app.post("/api/logout")
@@ -860,31 +1077,28 @@ def delete_account():
     d = body()
     e = resolve_token(d.get("token"))
     if not e:
-        return api_error("Session expired. Please log in again.", 401)
+        return api_error("Session expired. Please sign in again.", 401)
+    if str(d.get("confirm") or "").strip() != "DELETE":
+        return api_error('Type DELETE to confirm')
     uid, key = e["uid"], e["key"]
-    prof = store.get_user(key)
-    if not prof or not check_password_hash(prof.get("password_hash", ""), str(d.get("password") or "")[:128]):
-        return api_error("Incorrect password", 401)
-    store.delete_messages_by_uid(uid)
+    kick_account(uid, "deleted")
+    for gid in list(user_groups.get(uid, ())):
+        try:
+            store.delete_messages_by_uid(gid, uid)
+        except Exception:
+            log.exception("deleting messages failed")
+        cache_remove_uid(gid, uid)
+        socketio.emit("messages_removed", {"gid": gid, "uid": uid}, to=room(gid))
+        if member_remove(gid, uid):
+            emit_group(gid)
+    user_groups.pop(uid, None)
     store.delete_sessions_for_key(key)
     store.delete_user(key)
     revoke_account_tokens(key)
-    kick_account(uid, "deleted")
-    cache_remove_uid(uid)
     with dir_lock:
         directory.pop(uid, None)
         missing_uids.add(uid)
-    socketio.emit("messages_removed", {"uid": uid})
-    emit_presence()
     return jsonify(ok=True)
-
-
-@app.get("/api/messages")
-def message_history():
-    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    if not resolve_token(token):
-        return api_error("Please log in again", 401)
-    return jsonify(messages=history_payload())
 
 
 # --------------------------------------------------------------------------- Socket.IO events
@@ -895,19 +1109,113 @@ def on_connect(auth=None):
     if not e or e["uid"] not in directory:
         return False
     uid = e["uid"]
-    # One active connection per account: the newest tab/device wins.
-    kick_account(uid, "other_tab")
+    kick_account(uid, "other_tab")      # newest tab/device wins
     with online_lock:
         online[request.sid] = {"uid": uid, "token": token}
-    emit("chat_history", {"messages": history_payload()})
-    emit("call_status", call_status_payload())
-    emit_presence()
+    gids = list(user_groups.get(uid, ()))
+    for gid in gids:
+        join_room(room(gid))
+    rows = [group_public(gid) for gid in gids if gid in groups]
+    rows.sort(key=lambda r: (r["last"] or {}).get("ts", r["created_at"]), reverse=True)
+    emit("groups_state", {"groups": rows})
+    emit_user_presence(uid)
 
 
 @socketio.on("disconnect")
 def on_disconnect(*args):
-    drop_sid(request.sid)
-    emit_presence()
+    user = drop_sid(request.sid)
+    if user:
+        emit_user_presence(user["uid"])
+
+
+@socketio.on("create_group")
+def on_create_group(data=None):
+    u = current_socket_user()
+    if not u:
+        return {"ok": False, "error": "Session expired. Please sign in again."}
+    uid = u["uid"]
+    name = clean_spaces((data or {}).get("name") if isinstance(data, dict) else "")
+    if not name or len(name) > 40:
+        return {"ok": False, "error": "Group name is required (maximum 40 characters)."}
+    if not group_gate.hit(uid, 6, 60):
+        return {"ok": False, "error": "Please wait a moment before creating another group."}
+    with groups_lock:
+        owned = sum(1 for gid in user_groups.get(uid, ()) if groups.get(gid, {}).get("owner") == uid)
+        if owned >= MAX_GROUPS_OWNED:
+            return {"ok": False, "error": "You can own up to %d groups." % MAX_GROUPS_OWNED}
+        gid, code = uuid.uuid4().hex, new_code()
+    doc = {"name": name, "code": code, "owner": uid, "members": [uid], "created_at": now_ms()}
+    try:
+        store.create_group(gid, doc)
+    except Exception:
+        log.exception("create_group failed")
+        return {"ok": False, "error": "Could not create the group. Please try again."}
+    register_group(gid, doc)
+    join_room(room(gid))
+    return {"ok": True, "group": group_public(gid)}
+
+
+@socketio.on("join_group")
+def on_join_group(data=None):
+    u = current_socket_user()
+    if not u:
+        return {"ok": False, "error": "Session expired. Please sign in again."}
+    uid = u["uid"]
+    if not join_gate.hit(uid, 8, 60):
+        return {"ok": False, "error": "Too many attempts. Please wait a minute."}
+    raw = (data or {}).get("code") if isinstance(data, dict) else ""
+    code = re.sub(r"[^A-Za-z0-9]", "", str(raw or "")).upper()[:12]
+    gid = group_by_code.get(code)
+    if not code or not gid or gid not in groups:
+        return {"ok": False, "error": "No group found with that invite code."}
+    g = groups[gid]
+    if uid in g["members"]:
+        join_room(room(gid))
+        return {"ok": True, "group": group_public(gid), "already": True}
+    if len(g["members"]) >= MAX_MEMBERS:
+        return {"ok": False, "error": "This group is full."}
+    if len(user_groups.get(uid, ())) >= MAX_GROUPS_JOINED:
+        return {"ok": False, "error": "You have reached the group limit."}
+    try:
+        member_add(gid, uid)
+    except Exception:
+        log.exception("join_group failed")
+        return {"ok": False, "error": "Could not join the group. Please try again."}
+    join_room(room(gid))
+    emit_group(gid)
+    return {"ok": True, "group": group_public(gid)}
+
+
+@socketio.on("leave_group")
+def on_leave_group(data=None):
+    u = current_socket_user()
+    if not u:
+        return {"ok": False, "error": "Session expired. Please sign in again."}
+    gid = member_gid(u, data)
+    if not gid:
+        return {"ok": True}
+    if sid_call.get(request.sid) == gid:
+        leave_call(request.sid, u["uid"])
+    try:
+        alive = member_remove(gid, u["uid"])
+    except Exception:
+        log.exception("leave_group failed")
+        return {"ok": False, "error": "Could not leave the group. Please try again."}
+    leave_room(room(gid))
+    if alive:
+        emit_group(gid)
+    return {"ok": True, "gid": gid}
+
+
+@socketio.on("get_history")
+def on_get_history(data=None):
+    u = current_socket_user()
+    if not u:
+        return {"ok": False, "error": "Session expired. Please sign in again.", "code": "session"}
+    gid = member_gid(u, data)
+    if not gid:
+        return {"ok": False, "error": "You are not in this group."}
+    return {"ok": True, "gid": gid, "messages": history_payload(gid)}
 
 
 @socketio.on("send_message")
@@ -916,6 +1224,9 @@ def on_send_message(data=None):
     if not sender:
         return {"ok": False, "error": "Session expired. Please sign in again.", "code": "session"}
     data = data if isinstance(data, dict) else {}
+    gid = member_gid(sender, data)
+    if not gid:
+        return {"ok": False, "error": "You are not in this group."}
     text = str(data.get("text") or "").strip()
     if not text:
         return {"ok": False, "error": "Message is empty."}
@@ -932,14 +1243,14 @@ def on_send_message(data=None):
     m = {"id": secrets.token_hex(10), "uid": sender["uid"], "name": info.get("name", ""),
          "username": info.get("username", ""), "text": text, "ts": now_ms(),
          "kind": "user", "reactions": {}, "reply_to": reply_to}
-    cache_add(m)
-    socketio.emit("new_message", msg_out(m))          # instant delivery
+    cache_add(gid, m)
+    socketio.emit("new_message", msg_out(gid, m), to=room(gid))        # instant delivery
 
     def failed():
-        cache_remove(m["id"])
-        socketio.emit("message_failed", {"id": m["id"]})
+        cache_remove(gid, m["id"])
+        socketio.emit("message_failed", {"gid": gid, "id": m["id"]}, to=room(gid))
 
-    run_bg(io_pool, store.add_message, m["id"], {k: v for k, v in m.items() if k != "id"}, on_fail=failed)
+    run_bg(io_pool, store.add_message, gid, m["id"], {k: v for k, v in m.items() if k != "id"}, on_fail=failed)
     return {"ok": True, "id": m["id"]}
 
 
@@ -950,8 +1261,12 @@ def on_react_message(data=None):
     mid, emoji = str(data.get("id") or ""), str(data.get("emoji") or "")
     if not sender or emoji not in REACTIONS:
         return
-    with recent_lock:
-        m = recent_by_id.get(mid)
+    gid = member_gid(sender, data)
+    if not gid:
+        return
+    b = gbucket(gid)
+    with b["lock"]:
+        m = b["by_id"].get(mid)
         if not m or m.get("kind") == "system":
             return
         reactions = dict(m.get("reactions") or {})
@@ -960,57 +1275,50 @@ def on_react_message(data=None):
         else:
             reactions[sender["uid"]] = emoji
         m["reactions"] = reactions
-    socketio.emit("message_reaction", {"id": mid, "reactions": reactions})
-    run_bg(seq_pool, store.set_reactions, mid, dict(reactions))
+    socketio.emit("message_reaction", {"gid": gid, "id": mid, "reactions": reactions}, to=room(gid))
+    run_bg(seq_pool, store.set_reactions, gid, mid, dict(reactions))
 
 
-# ---- group call signalling (WebRTC mesh)
+# ---- group call signalling (WebRTC mesh). One call per group, one call per person at a time.
 @socketio.on("join_video")
 def join_video(data=None):
-    global call_started_at
     user = current_socket_user()
     if not user:
         return {"ok": False, "reason": "Session expired. Please sign in again."}
     data = data if isinstance(data, dict) else {}
+    gid = member_gid(user, data)
+    if not gid:
+        return {"ok": False, "reason": "You are not in this group."}
     sid = request.sid
     mic, cam = bool(data.get("mic", True)), bool(data.get("cam", True))
     with online_lock:
-        if any((online.get(s) or {}).get("uid") == user["uid"] for s in video_sids if s != sid):
+        if sid_call.get(sid) not in (None, gid):
+            return {"ok": False, "reason": "You are already in a call in another group."}
+        c = calls.get(gid)
+        if c and any((online.get(s) or {}).get("uid") == user["uid"] for s in c["sids"] if s != sid):
             return {"ok": False, "reason": "This account is already in the call on another device."}
-        was_empty = not video_sids
-        already = sid in video_sids
-        video_sids.add(sid)
-        video_media[sid] = {"mic": mic, "cam": cam}
-        if was_empty:
-            call_started_at = now_ms()
-        peers = [s for s in video_sids if s != sid]
-        profiles = {s: peer_profile(s) for s in peers}
-        me_profile = peer_profile(sid)
-        count = len(video_sids)
-        elapsed = now_ms() - (call_started_at or now_ms())
-    name = me_profile["name"]
-    if not already:
-        system_message("%s started the call" % name if was_empty else "%s joined the call" % name)
+        if c is None:
+            c = calls[gid] = {"sids": set(), "media": {}, "started": now_ms(), "starter": user["uid"]}
+        already = sid in c["sids"]
+        c["sids"].add(sid)
+        c["media"][sid] = {"mic": mic, "cam": cam}
+        sid_call[sid] = gid
+        peers = [s for s in c["sids"] if s != sid]
+        profiles = {s: peer_profile(s, gid) for s in peers}
+        me_profile = peer_profile(sid, gid)
+        count = len(c["sids"])
+        elapsed = now_ms() - c["started"]
+    if not already:                       # joining is silent: no chat note
         for p in peers:
-            socketio.emit("video_peer_joined", {"sid": sid, **me_profile}, to=p)
-        emit_call_status()
-        emit_presence()
-    return {"ok": True, "peers": peers, "profiles": profiles, "participant_count": count,
-            "elapsed_ms": elapsed}
+            socketio.emit("video_peer_joined", {"sid": sid, "gid": gid, **me_profile}, to=p)
+        emit_group_presence(gid)
+    return {"ok": True, "peers": peers, "profiles": profiles, "participant_count": count, "elapsed_ms": elapsed}
 
 
 @socketio.on("leave_video")
 def leave_video():
-    sid = request.sid
-    with online_lock:
-        was_in_call = sid in video_sids
-        video_sids.discard(sid)
-        video_media.pop(sid, None)
-        peers = list(video_sids)
-        name = (directory.get((online.get(sid) or {}).get("uid")) or {}).get("name", "A member")
-    if was_in_call:
-        _announce_leave(sid, name, peers)
-        emit_presence()
+    user = current_socket_user()
+    leave_call(request.sid, (user or {}).get("uid"))
 
 
 @socketio.on("media_state")
@@ -1020,12 +1328,14 @@ def media_state(data=None):
     data = data if isinstance(data, dict) else {}
     sid = request.sid
     with online_lock:
-        if sid not in video_sids:
+        gid = sid_call.get(sid)
+        c = calls.get(gid) if gid else None
+        if not c:
             return
-        st = video_media.setdefault(sid, {})
+        st = c["media"].setdefault(sid, {})
         st["mic"], st["cam"] = bool(data.get("mic", True)), bool(data.get("cam", True))
         out = {"sid": sid, "mic": st["mic"], "cam": st["cam"]}
-        peers = [s for s in video_sids if s != sid]
+        peers = [s for s in c["sids"] if s != sid]
     for p in peers:
         socketio.emit("peer_media", out, to=p)
 
@@ -1039,7 +1349,8 @@ def webrtc_signal(data=None):
     if not current_socket_user():
         return
     with online_lock:
-        if request.sid not in video_sids or target not in video_sids:
+        gid = sid_call.get(request.sid)
+        if not gid or sid_call.get(target) != gid:
             return
     socketio.emit("webrtc_signal", {"from": request.sid, "kind": kind, "payload": data.get("payload")}, to=target)
 
@@ -1050,9 +1361,9 @@ def warm_up():
     try:
         for key, prof in store.all_users():
             dir_put(key, prof)
-        for m in store.recent_messages(CACHE_LIMIT):
-            cache_add(m)
-        log.info("warm-up: %d users, %d messages in %.2fs", len(directory), len(recent), time.time() - t0)
+        for gid, doc in store.all_groups():
+            register_group(gid, doc)
+        log.info("warm-up: %d users, %d groups in %.2fs", len(directory), len(groups), time.time() - t0)
     except Exception:
         log.exception("warm-up failed (continuing with empty caches)")
 

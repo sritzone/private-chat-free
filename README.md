@@ -3,12 +3,18 @@
 Private group chat with video calls. Dark/light UI, responsive on desktop and mobile.
 
 ## Features
-- Register / sign in (hashed passwords, login rate-limit)
-- **One login per account** — signing in on another device (or opening a second tab) signs the old one out instantly; the old tab can click "Use here" to take it back
-- Real-time chat: replies, reactions, link detection, day separators, unread pill, members sidebar
-- **Group video call**: pre-join lobby (camera preview, mic/cam toggles), adaptive grid, picture-in-picture for 1-to-1, speaking highlight, mic/camera state shown to others, call timer, connection status, auto ICE-restart, "tap to enable sound" fallback, audio-only fallback when no camera
-- **Account page**: photo upload with preview, display name, change password, theme, delete account
-- Fast: in-memory auth/user/message caches, write-behind persistence, cached avatar images, gzip, vendored socket.io, WebSocket-first
+- **Google sign-in only** (no usernames or passwords). The Google ID token is verified on the server.
+- **Groups**: any user can create a group and share its 8-character invite code (or invite link `/?join=CODE`). Others join with the code. Chats and calls are per group, with a chat list, unread badges and call-in-progress indicator.
+- One login per account — signing in on another device (or a second tab) signs the old one out
+- Real-time chat: replies, reactions, emoji, link detection, day separators, unread pill
+- **Group video / voice calls** (WebRTC mesh): lobby preview, adaptive grid, 1-to-1 full-screen layout, speaking highlight. Joining a call is silent; leaving adds a small line to the chat.
+- Account page: photo, display name, theme, delete account (type DELETE)
+- WhatsApp-style dark/light UI, responsive. On phones the profile button is hidden from the chat header (open it from the chats drawer).
+
+## Google sign-in setup
+1. Google Cloud Console → APIs & Services → Credentials → **Create OAuth client ID** → type **Web application**.
+2. Add your site URL (e.g. `https://your-app.onrender.com`) to **Authorized JavaScript origins**.
+3. Set the client ID in the `GOOGLE_CLIENT_ID` environment variable.
 
 ## Firebase setup
 1. Create a Firebase project and a Firestore database (Native mode).
@@ -24,6 +30,7 @@ Environment variables
 | Name | Purpose |
 |---|---|
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | required — service account JSON |
+| `GOOGLE_CLIENT_ID` | required — Google OAuth web client ID |
 | `SECRET_KEY` | long random string |
 | `ROOM_TITLE` | chat title (old `FFX-G` still works) |
 | `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL` | optional TURN server for calls on strict mobile/corporate networks |
@@ -33,9 +40,12 @@ Environment variables
 pip install -r requirements.txt
 LOCAL_DEV=1 python app.py      # http://localhost:5000  (data is not saved)
 ```
-Camera/mic need HTTPS (or `localhost`).
+Without `GOOGLE_CLIENT_ID`, local mode shows a clearly-marked **test sign-in** (name only). It is disabled whenever `GOOGLE_CLIENT_ID` is set or Firebase is used, so it never exists in production.
+
+## Data model (Firestore)
+`chat_users` (accounts, key `g_<google sub>`), `chat_sessions`, `chat_groups/{gid}` (name, code, owner, members) with messages in `chat_groups/{gid}/messages` (no composite index needed).
 
 ## Notes
 - Calls are peer-to-peer mesh: best for small groups (≤ 6). Without TURN some networks cannot connect.
-- Existing users, sessions and messages keep working. Old messages that stored avatars inside each message are cleaned up automatically (the avatar now comes from the user profile).
-- New usernames must start with a letter/number (Firestore does not allow ids like `__name__`).
+- Old username/password accounts and the old single-room messages are not migrated: everyone signs in with Google and starts or joins groups.
+- Limits: 10 groups owned, 30 joined, 50 members per group.

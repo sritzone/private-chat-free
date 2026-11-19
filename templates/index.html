@@ -24,47 +24,37 @@
     <h1>Talk, call and stay <em>connected</em>.</h1>
     <p>A private space for your people: real-time group chat, crystal-clear video calls and a profile that is truly yours.</p>
     <ul class="features">
-      <li><span class="ico" data-ico="chat"></span>Instant messages with replies and reactions</li>
+      <li><span class="ico" data-ico="chat"></span>Create private groups and invite friends with a code</li>
       <li><span class="ico" data-ico="video"></span>Group video &amp; voice calls in your browser</li>
-      <li><span class="ico" data-ico="shield"></span>Secure sign-in &mdash; one device per account</li>
+      <li><span class="ico" data-ico="shield"></span>Google sign-in &mdash; no passwords to remember</li>
     </ul>
   </section>
   <section class="auth-card">
-    <div class="tabs" role="tablist">
-      <button class="tab active" id="tabLogin" type="button" role="tab">Sign in</button>
-      <button class="tab" id="tabRegister" type="button" role="tab">Create account</button>
-    </div>
-    <h2 id="authTitle">Welcome back</h2>
-    <p class="sub" id="authDesc">Sign in to continue to your community.</p>
-    <form id="authForm" novalidate>
-      <label class="field" id="nameField" hidden><span>Full name</span><input id="name" placeholder="e.g. Ridwan Ahmed" autocomplete="name" maxlength="40"></label>
-      <label class="field"><span>Username</span><input id="username" placeholder="Enter your username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="40"></label>
-      <label class="field"><span>Password</span>
-        <div class="pw"><input id="password" type="password" placeholder="Enter your password" autocomplete="current-password" maxlength="128">
-        <button class="icon-btn" id="pwToggle" type="button" aria-label="Show password"><span class="ico" data-ico="eye"></span></button></div>
-      </label>
-      <div class="err" id="authError" role="alert"></div>
-      <button class="btn primary lg block" id="submitBtn" type="submit"><span class="spin"></span><span class="label">Sign in</span></button>
+    <h2 id="authTitle">Welcome</h2>
+    <p class="sub" id="authDesc">Sign in with your Google account to continue.</p>
+    <div class="g-wrap" id="googleWrap" hidden><div id="googleBtn"></div></div>
+    <form id="devForm" hidden novalidate>
+      <div class="note-box"><span class="ico" data-ico="shield"></span><span>Local testing only: Google sign-in is off because <code>GOOGLE_CLIENT_ID</code> is not set.</span></div>
+      <label class="field"><span>Test name</span><input id="devName" placeholder="e.g. Ridwan" maxlength="40" autocomplete="off"></label>
+      <button class="btn primary lg block" id="devBtn" type="submit"><span class="spin"></span><span class="label">Continue (test)</span></button>
     </form>
+    <p class="err" id="noAuth" hidden>Google sign-in is not configured on this server. Set the <code>GOOGLE_CLIENT_ID</code> environment variable.</p>
+    <div class="err" id="authError" role="alert"></div>
     <p class="fine">By continuing, you agree to use this private community respectfully.</p>
   </section>
 </main>
 
 <!-- ============ App ============ -->
 <div class="app" id="app" hidden>
-  <aside class="sidebar" id="sidebar" aria-label="Members">
+  <aside class="sidebar" id="sidebar" aria-label="Chats">
     <div class="side-head">
       <div class="logo round">SR</div>
       <div style="min-width:0"><b>{{ room_title }}</b><small>Private community</small></div>
+      <button class="icon-btn newgrp" id="newGroupBtn" type="button" aria-label="New group or join" title="New group / Join"><span class="ico" data-ico="plus"></span></button>
       <button class="icon-btn" id="sideClose" type="button" aria-label="Close menu"><span class="ico" data-ico="close"></span></button>
     </div>
-    <div class="call-card" id="callCard">
-      <span class="cc-ico"><span class="ico" data-ico="video"></span></span>
-      <div class="cc-body"><b id="callCardTitle">Group call</b><p id="callCardText">Start a video call with everyone online.</p></div>
-      <button class="btn primary sm" id="callCardBtn" type="button">Start</button>
-    </div>
-    <div class="side-title"><span>Online</span><span id="onlineCount">0</span></div>
-    <ul class="members" id="members"></ul>
+    <div class="side-title"><span>Chats</span><span id="chatCount">0</span></div>
+    <ul class="chats" id="chatList"></ul>
     <div class="side-foot"><button class="me-chip" id="meChip" type="button" aria-label="Open my account"></button></div>
   </aside>
   <div class="scrim" id="scrim"></div>
@@ -72,15 +62,24 @@
   <section class="main">
     <header class="top">
       <button class="icon-btn menu" id="menuBtn" type="button" aria-label="Open menu"><span class="ico" data-ico="menu"></span></button>
-      <div class="logo round grp" aria-hidden="true">SR</div>
-      <div class="meta"><h1 id="roomTitle">{{ room_title }}</h1><div class="status" id="status" data-s="wait"><i></i><span id="statusText">Connecting…</span></div></div>
+      <button class="grp-btn" id="grpBtn" type="button" aria-label="Group info"><span class="grp" id="grpAv"></span></button>
+      <div class="meta" id="metaBtn"><h1 id="roomTitle">{{ room_title }}</h1><div class="status" id="status" data-s="wait"><i></i><span id="statusText">Connecting…</span></div></div>
       <button class="hbtn" id="callBtn" type="button" aria-label="Start video call" title="Video call"><span class="ico" data-ico="video"></span></button>
       <button class="hbtn" id="voiceBtn" type="button" aria-label="Start voice call" title="Voice call"><span class="ico" data-ico="phone"></span></button>
       <button class="me-btn" id="meBtn" type="button" aria-label="My account"></button>
     </header>
     <div class="banner" id="callBanner" hidden><span class="live-dot"></span><span class="t" id="callBannerText"></span><button class="btn primary" id="joinBannerBtn" type="button">Join call</button></div>
 
-    <div class="chat" id="chatView">
+    <div class="welcome" id="welcome" hidden>
+      <div class="w-card">
+        <div class="logo round big">SR</div>
+        <h2 id="welcomeTitle">Start your first group</h2>
+        <p id="welcomeText">Create a private group and share its invite code, or join a friend's group with their code.</p>
+        <div class="row"><button class="btn primary lg" id="wCreate" type="button"><span class="ico" data-ico="plus"></span>Create group</button><button class="btn lg" id="wJoin" type="button"><span class="ico" data-ico="users"></span>Join with code</button></div>
+      </div>
+    </div>
+
+    <div class="chat" id="chatView" hidden>
       <div class="feed" id="feed" role="log" aria-live="polite"></div>
       <button class="to-bottom" id="toBottom" type="button" hidden><span class="ico" data-ico="down"></span><span id="toBottomText">New messages</span></button>
       <div class="reply-bar" id="replyBar" hidden><span class="ico" data-ico="reply"></span><div class="q"><b id="replyName"></b><span id="replyText"></span></div><button class="icon-btn" id="replyCancel" type="button" aria-label="Cancel reply"><span class="ico" data-ico="close"></span></button></div>
@@ -99,7 +98,7 @@
           <div class="cover"></div>
           <div class="acc-id">
             <div class="avatar-wrap"><div class="avatar xl" id="accAvatar"></div><button class="cam-btn" id="accPhotoBtn" type="button" aria-label="Change profile photo"><span class="ico" data-ico="camera"></span></button></div>
-            <div class="who"><h2 id="accName"></h2><p id="accUser"></p><span class="pill ok"><span class="dot"></span>Online</span></div>
+            <div class="who"><h2 id="accName"></h2><p>Google account</p><span class="pill ok"><span class="dot"></span>Online</span></div>
             <button class="btn" id="signOutBtn" type="button"><span class="ico" data-ico="logout"></span>Sign out</button>
           </div>
         </div>
@@ -108,7 +107,6 @@
             <h3>Profile</h3><p class="d">This name is shown to everyone in the chat and in calls.</p>
             <form id="nameForm" novalidate>
               <label class="field"><span>Display name</span><input id="accNameInput" maxlength="40" autocomplete="name"></label>
-              <label class="field"><span>Username</span><input id="accUserInput" disabled></label>
               <button class="btn primary" id="nameSave" type="submit"><span class="spin"></span><span class="label">Save changes</span></button>
             </form>
           </section>
@@ -118,23 +116,17 @@
             <input id="avatarFile" type="file" accept="image/jpeg,image/png,image/webp,image/*" hidden>
           </section>
           <section class="card">
-            <h3>Security</h3><p class="d">Choose a strong password you do not use anywhere else.</p>
-            <form id="pwForm" novalidate>
-              <label class="field"><span>Current password</span><input id="pwCur" type="password" autocomplete="current-password" maxlength="128"></label>
-              <label class="field"><span>New password</span><input id="pwNew" type="password" autocomplete="new-password" maxlength="128"></label>
-              <label class="field"><span>Confirm new password</span><input id="pwNew2" type="password" autocomplete="new-password" maxlength="128"></label>
-              <button class="btn" id="pwSave" type="submit"><span class="spin"></span><span class="label">Update password</span></button>
-            </form>
+            <h3>Sign-in</h3><p class="d">You sign in with your Google account, so there is no password to manage here.</p>
             <div class="note-box"><span class="ico" data-ico="shield"></span><span>One account, one device. Signing in somewhere else signs this device out.</span></div>
           </section>
           <section class="card">
             <h3>Appearance</h3><p class="d">Pick the look that is easiest on your eyes.</p>
             <div class="seg" id="themeSeg"><button type="button" data-theme="dark"><span class="ico" data-ico="moon"></span>Dark</button><button type="button" data-theme="light"><span class="ico" data-ico="sun"></span>Light</button></div>
             <h3 style="margin-top:26px">Account details</h3>
-            <dl class="kv" style="margin-top:12px"><dt>Username</dt><dd id="kvUser"></dd><dt>Member since</dt><dd id="kvSince"></dd><dt>Status</dt><dd>Signed in on this device</dd></dl>
+            <dl class="kv" style="margin-top:12px"><dt>Member since</dt><dd id="kvSince"></dd><dt>Status</dt><dd>Signed in on this device</dd></dl>
           </section>
           <section class="card danger wide">
-            <h3>Delete account</h3><p class="d">Permanently deletes your account, sessions and all of your messages. This cannot be undone.</p>
+            <h3>Delete account</h3><p class="d">Permanently deletes your account, sessions and all of your messages in every group. This cannot be undone.</p>
             <button class="btn danger" id="deleteBtn" type="button"><span class="ico" data-ico="trash"></span>Delete my account</button>
           </section>
         </div>
@@ -147,7 +139,7 @@
 <section class="call" id="callRoot" hidden aria-label="Group call">
   <div class="call-bg"></div>
   <header class="call-top">
-    <div class="call-title"><span class="call-name">{{ room_title }}</span><div class="call-sub"><span class="live-dot"></span><span class="timer" id="callTimer">00:00</span></div></div>
+    <div class="call-title"><span class="call-name" id="callName">{{ room_title }}</span><div class="call-sub"><span class="live-dot"></span><span class="timer" id="callTimer">00:00</span></div></div>
     <div class="call-chips"><span class="chip" id="callCount">1 in call</span><span class="chip" id="callNet" data-state="wait"><i></i><span id="callNetText">Connecting</span></span></div>
   </header>
 
