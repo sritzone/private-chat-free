@@ -59,6 +59,9 @@ const I = {
   camOff: svg('<path d="m3 3 18 18"/><path d="M9.5 6H12a3 3 0 0 1 3 3v2.5M15 14.5V15a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V9a3 3 0 0 1 1.2-2.4"/><path d="m15 10 6-3.5v11l-3-1.7"/>'),
   spk: svg('<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 9a4.5 4.5 0 0 1 0 6M19 6.5a8 8 0 0 1 0 11"/>'),
   spkOff: svg('<path d="m3 3 18 18"/><path d="M4 9v6h4l5 4V9.5M13 5v1.5"/><path d="M8 9l5-4"/>'),
+  phone: svg('<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/>'),
+  smile: svg('<circle cx="12" cy="12" r="9"/><path d="M8.5 14a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01"/>'),
+  check: svg('<path d="m5 12.5 4.5 4.5L19 7.5"/>'),
   end: svg('<path d="M3.5 14.5c5-4.5 12-4.5 17 0l-2.4 3a1.6 1.6 0 0 1-2.1.4l-2.1-1.3a3 3 0 0 0-3.2 0l-2.1 1.3a1.6 1.6 0 0 1-2.1-.4l-3-3z"/>')
 };
 const ico = name => h('span', { class: 'ico', html: I[name] });
@@ -137,7 +140,7 @@ function linkify(text) {
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;
   ls.set(THEME_KEY, t);
-  document.querySelector('meta[name=theme-color]')?.setAttribute('content', t === 'light' ? '#ffffff' : '#0d1322');
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', t === 'light' ? '#f0f2f5' : '#202c33');
   document.querySelectorAll('#themeSeg button').forEach(b => b.classList.toggle('on', b.dataset.theme === t));
 }
 
@@ -231,7 +234,7 @@ function showKicked(code, reason) {
 /* ------------------------------------------------------------------ socket */
 function setStatus(state, text) {
   $('status').dataset.s = state;
-  $('statusText').textContent = text;
+  $('statusText').textContent = state === 'on' && S.names ? S.names : text;
 }
 function connect() {
   if (S.sock) { S.sock.removeAllListeners(); S.sock.disconnect(); }
@@ -281,6 +284,8 @@ function onProfileUpdated(d) {
 /* ------------------------------------------------------------------ members & call card */
 function renderMembers(users) {
   $('onlineCount').textContent = users.length;
+  S.names = users.map(u => u.id === S.me.id ? 'You' : String(u.name || u.username || '').split(' ')[0]).filter(Boolean).join(', ');
+  if ($('status').dataset.s === 'on' && S.names) $('statusText').textContent = S.names;
   $('members').replaceChildren(...users.map(u => h('li', { class: 'member' },
     h('span', { class: 'wrap' }, avatarEl(u, 38)),
     h('div', { class: 'mi' }, h('b', { text: u.name + (u.id === S.me.id ? ' (You)' : '') }), h('small', { text: '@' + u.username })),
@@ -291,10 +296,10 @@ function updateCallUI() {
   $('callCard').classList.toggle('live', active);
   $('callCardTitle').textContent = active ? 'Call in progress' : 'Group call';
   $('callCardText').textContent = active ? who + ' · ' + ci.participants + ' in call' : 'Start a video call with everyone online.';
-  $('callCardBtn').textContent = active ? 'Join call' : 'Start call';
-  $('callBtn').querySelector('.label').textContent = active ? 'Join' : 'Call';
-  $('callBtn').classList.toggle('primary', active);
-  $('callBtn').setAttribute('aria-label', active ? 'Join group call' : 'Start group call');
+  $('callCardBtn').textContent = active ? 'Join' : 'Start';
+  for (const b of [$('callBtn'), $('voiceBtn')]) b.classList.toggle('live', active);
+  $('callBtn').title = $('callBtn').ariaLabel = active ? 'Join video call' : 'Start video call';
+  $('voiceBtn').title = $('voiceBtn').ariaLabel = active ? 'Join voice call' : 'Start voice call';
   $('callBanner').hidden = !(active && C.phase === 'idle');
   $('callBannerText').textContent = who + ' started a group call · ' + ci.participants + ' in call';
 }
@@ -339,7 +344,8 @@ function buildMessage(m) {
   const d = new Date(m.ts), day = d.toDateString();
   if (S.lastDay !== day) { frag.append(h('div', { class: 'day-sep' }, h('span', { text: dayLabel(d) }))); S.lastDay = day; S.lastMsg = null; }
   if (m.kind === 'system' || m.uid === 'system') {
-    frag.append(h('div', { class: 'sys', dataset: { id: m.id } }, h('span', { text: m.text })));
+    const isCall = /\bcall\b/i.test(m.text || '');
+    frag.append(h('div', { class: 'sys' + (isCall ? ' is-call' : ''), dataset: { id: m.id } }, h('span', null, isCall ? h('span', { class: 'ico', html: I.phone }) : null, m.text || '')));
     S.lastMsg = null;
     return frag;
   }
@@ -348,7 +354,7 @@ function buildMessage(m) {
   S.lastMsg = { uid: m.uid, ts: m.ts };
   const row = h('div', { class: 'msg' + (mine ? ' mine' : '') + (cont ? ' cont' : ''), dataset: { id: m.id, uid: m.uid } });
   const bubble = h('div', { class: 'bubble' });
-  if (!mine && !cont) bubble.append(h('div', { class: 'name', text: m.name || m.username || 'Member' }));
+  if (!mine && !cont) bubble.append(h('div', { class: 'name', style: '--h:' + hue(String(m.uid || m.name || '')), text: m.name || m.username || 'Member' }));
   if (m.reply_to) {
     const rid = m.reply_to.id;
     bubble.append(h('div', {
@@ -359,7 +365,7 @@ function buildMessage(m) {
       }
     }, h('b', { text: m.reply_to.name || 'Member' }), h('span', { text: m.reply_to.text || '' })));
   }
-  bubble.append(h('div', { class: 'text' }, linkify(m.text || '')), h('time', { class: 'time', text: fmtTime(m.ts) }));
+  bubble.append(h('div', { class: 'text' }, linkify(m.text || '')), h('time', { class: 'time' }, fmtTime(m.ts), mine ? h('span', { class: 'tick ico', html: I.check }) : null));
   bubble.addEventListener('click', e => {
     if (e.target.closest('a') || !matchMedia('(hover:none)').matches) return;
     const open = row.classList.contains('tools-open');
@@ -389,6 +395,9 @@ function startReply(m) {
 }
 function clearReply() { S.reply = null; $('replyBar').hidden = true; }
 const input = $('msgInput');
+const EMOJIS = ['😀','😂','🤣','😊','😍','🥰','😘','😎','🤔','😅','🥹','😭','😡','😴','🤗','😇','👍','👎','🙏','👏','🙌','💪','🤝','👀','🔥','❤️','💔','🎉','✅','❌','⭐','🎂'];
+function insertEmoji(em) { const a = input.selectionStart == null ? input.value.length : input.selectionStart, b = input.selectionEnd == null ? a : input.selectionEnd; input.setRangeText(em, a, b, 'end'); autosize(); if (matchMedia('(pointer:fine)').matches) input.focus(); }
+function buildEmojiTray() { $('emojiTray').replaceChildren(...EMOJIS.map(em => h('button', { type: 'button', 'aria-label': em, onclick: () => insertEmoji(em) }, em))); }
 function autosize() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 140) + 'px'; $('sendBtn').disabled = !input.value.trim(); }
 function sendMessage(e) {
   if (e) e.preventDefault();
@@ -486,9 +495,13 @@ const C = {
   startedAt: 0, timer: null, ac: null, an: {}, speak: null, wake: null
 };
 function stopStream(s) { if (s) s.getTracks().forEach(t => t.stop()); }
-async function getMedia() {
+async function getMedia(voiceOnly) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('Calls need a secure (HTTPS) connection and a modern browser.');
   const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+  if (voiceOnly) {
+    try { return await navigator.mediaDevices.getUserMedia({ audio }); }
+    catch (e) { throw new Error(e.name === 'NotAllowedError' || e.name === 'SecurityError' ? 'Microphone access is blocked. Allow access in your browser settings, then try again.' : e.name === 'NotFoundError' ? 'No microphone was found on this device.' : 'Could not start your microphone. Close other apps using it and try again.'); }
+  }
   const video = { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } };
   try { return await navigator.mediaDevices.getUserMedia({ audio, video }); }
   catch (e) {
@@ -510,7 +523,7 @@ function renderControls() {
     const b = $(id);
     b.innerHTML = '<span class="ico">' + (cam ? I.cam : I.camOff) + '</span>';
     b.classList.toggle('off', !cam); b.disabled = !C.hasCam;
-    b.title = b.ariaLabel = !C.hasCam ? 'No camera found' : cam ? 'Turn camera off' : 'Turn camera on';
+    b.title = b.ariaLabel = !C.hasCam ? (C.voice ? 'Camera is off in a voice call' : 'No camera found') : cam ? 'Turn camera off' : 'Turn camera on';
   }
   $('spkBtn').innerHTML = '<span class="ico">' + (C.spkOn ? I.spk : I.spkOff) + '</span>';
   $('spkBtn').classList.toggle('off', !C.spkOn);
@@ -519,20 +532,21 @@ function renderControls() {
   $('preview').classList.toggle('nocam', !cam);
   updateTile('local');
 }
-async function openCall() {
+async function openCall(voice = false) {
   if (C.phase !== 'idle') return;
+  C.voice = voice === true;
   if (!S.sock || !S.sock.connected) return toast('Still connecting to the server. Try again in a moment.', 'warn');
   C.phase = 'lobby';
   showCall(true);
   $('lobby').hidden = false; $('stage').hidden = true; $('callBar').hidden = true;
   $('lobbyErr').textContent = ''; $('joinNow').disabled = true;
-  $('lobbyTitle').textContent = S.callInfo.active ? 'Join the call' : 'Start a call';
+  $('lobbyTitle').textContent = (C.voice ? 'Voice call' : (S.callInfo.active ? 'Join the call' : 'Start a call'));
   $('lobbyInfo').textContent = 'Checking your camera and microphone…';
   $('previewCover').replaceChildren(avatarEl(S.me));
   $('callTimer').textContent = '00:00'; setNet('wait', 'Not connected'); $('callCount').textContent = 'Preview';
   document.addEventListener('keydown', onCallKey);
   try {
-    const stream = await getMedia();
+    const stream = await getMedia(C.voice);
     if (C.phase !== 'lobby') { stopStream(stream); return; }
     C.local = stream;
     C.hasMic = stream.getAudioTracks().length > 0; C.hasCam = stream.getVideoTracks().length > 0;
@@ -542,7 +556,8 @@ async function openCall() {
     $('lobbyInfo').textContent = S.callInfo.active
       ? (S.callInfo.started_by || 'A member') + ' started this call' + (n > 1 ? ' - ' + n + ' people are in it.' : '.')
       : 'You will be the first one in. Others can join from the chat.';
-    if (!C.hasCam) $('lobbyInfo').textContent += ' No camera found - you will join with audio only.';
+    if (C.voice) $('lobbyInfo').textContent += ' Your camera stays off in a voice call.';
+    else if (!C.hasCam) $('lobbyInfo').textContent += ' No camera found - you will join with audio only.';
     $('joinNow').disabled = false;
   } catch (e) {
     $('lobbyTitle').textContent = 'Cannot start the call';
@@ -813,7 +828,10 @@ function init() {
   $('menuBtn').onclick = openSide; $('sideClose').onclick = closeSide; $('scrim').onclick = closeSide;
   $('meBtn').onclick = () => showView('account'); $('meChip').onclick = () => showView('account');
   $('accBack').onclick = () => showView('chat');
-  $('callBtn').onclick = openCall; $('callCardBtn').onclick = () => { closeSide(); openCall(); }; $('joinBannerBtn').onclick = openCall;
+  $('callBtn').onclick = () => openCall(false); $('voiceBtn').onclick = () => openCall(true);
+  $('callCardBtn').onclick = () => { closeSide(); openCall(false); }; $('joinBannerBtn').onclick = () => openCall(false);
+  buildEmojiTray();
+  $('emojiBtn').onclick = () => { const open = $('emojiTray').hidden; $('emojiTray').hidden = !open; $('chatView').classList.toggle('tray-open', open); $('emojiBtn').classList.toggle('on', open); };
 
   input.addEventListener('input', autosize);
   input.addEventListener('keydown', e => {
