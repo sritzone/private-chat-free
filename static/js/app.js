@@ -149,25 +149,52 @@ function applyTheme(t) {
 
 /* ------------------------------------------------------------------ auth (Google only) */
 function showError(msg) { $('authError').textContent = msg || ''; }
-async function onGoogleCredential(resp) {
-  if (!resp || !resp.credential) return showError('Google sign-in was cancelled.');
-  showError(''); $('googleWrap').classList.add('busy');
-  try { enter(await api('google', { credential: resp.credential })); }
-  catch (err) { showError(err.message); }
+const FB_VER = '10.14.1';
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const el = h('script', { src }); el.onload = res; el.onerror = () => rej(new Error('Could not load Google sign-in. Check your connection and refresh.'));
+    document.head.append(el);
+  });
+}
+async function initFirebase() {
+  if (S.fb) return S.fb;
+  await loadScript('https://www.gstatic.com/firebasejs/' + FB_VER + '/firebase-app-compat.js');
+  await loadScript('https://www.gstatic.com/firebasejs/' + FB_VER + '/firebase-auth-compat.js');
+  if (!firebase.apps.length) firebase.initializeApp(BOOT.firebase);
+  return (S.fb = firebase.auth());
+}
+async function finishFirebase(user) {
+  const token = await user.getIdToken();
+  try { await S.fb.signOut(); } catch (e) {}      // our own session takes over from here
+  enter(await api('google', { credential: token }));
+}
+async function loadGoogle() {
+  if (!BOOT.firebase || S.gsi) return;
+  S.gsi = true;
+  try {
+    const auth = await initFirebase();
+    const r = await auth.getRedirectResult();    // returns here after a redirect sign-in (some mobile browsers)
+    if (r && r.user) { $('googleWrap').classList.add('busy'); await finishFirebase(r.user); }
+  } catch (e) { showError(e.message && !e.code ? e.message : 'Google sign-in failed. Please try again.'); S.gsi = false; }
   finally { $('googleWrap').classList.remove('busy'); }
 }
-function loadGoogle() {
-  if (!BOOT.google_client_id || S.gsi) return;
-  S.gsi = true;
-  const s = h('script', { src: 'https://accounts.google.com/gsi/client', async: true, defer: true });
-  s.onload = () => {
-    try {
-      google.accounts.id.initialize({ client_id: BOOT.google_client_id, callback: onGoogleCredential, ux_mode: 'popup', auto_select: false, cancel_on_tap_outside: true });
-      google.accounts.id.renderButton($('googleBtn'), { type: 'standard', theme: document.documentElement.dataset.theme === 'light' ? 'outline' : 'filled_black', size: 'large', shape: 'pill', text: 'continue_with', logo_alignment: 'left', width: 300 });
-    } catch (e) { showError('Could not start Google sign-in.'); }
-  };
-  s.onerror = () => { S.gsi = false; showError('Could not load Google sign-in. Check your connection and refresh.'); };
-  document.head.append(s);
+async function onGoogleClick() {
+  showError(''); $('googleWrap').classList.add('busy');
+  try {
+    const auth = await initFirebase(), provider = new firebase.auth.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    try { const r = await auth.signInWithPopup(provider); await finishFirebase(r.user); }
+    catch (e) {
+      if (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment') { await auth.signInWithRedirect(provider); return; }
+      throw e;
+    }
+  } catch (e) {
+    const c = e && e.code;
+    if (c === 'auth/popup-closed-by-user' || c === 'auth/cancelled-popup-request') showError('Sign-in was cancelled.');
+    else if (c === 'auth/unauthorized-domain') showError('This website address is not allowed yet. Add it under Firebase Authentication > Settings > Authorized domains.');
+    else if (c === 'auth/operation-not-allowed') showError('Google sign-in is not enabled in Firebase Authentication.');
+    else showError(e && !c ? e.message : 'Google sign-in failed. Please try again.');
+  } finally { $('googleWrap').classList.remove('busy'); }
 }
 async function devLogin(e) {
   e.preventDefault();
@@ -180,9 +207,9 @@ async function devLogin(e) {
 }
 function showAuth() {
   $('splash').hidden = true; $('app').hidden = true; $('auth').hidden = false;
-  $('googleWrap').hidden = !BOOT.google_client_id;
+  $('googleWrap').hidden = !BOOT.firebase;
   $('devForm').hidden = !BOOT.dev_login;
-  $('noAuth').hidden = !!(BOOT.google_client_id || BOOT.dev_login);
+  $('noAuth').hidden = !!(BOOT.firebase || BOOT.dev_login);
   loadGoogle();
 }
 function enter(data) {
@@ -1005,6 +1032,7 @@ function init() {
   renderControls();
 
   $('devForm').addEventListener('submit', devLogin);
+  $('googleBtn').onclick = onGoogleClick;
   S.pendingJoin = (new URLSearchParams(location.search).get('join') || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 12);
 
   $('menuBtn').onclick = openSide; $('sideClose').onclick = closeSide; $('scrim').onclick = closeSide;

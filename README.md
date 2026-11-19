@@ -3,7 +3,7 @@
 Private group chat with video calls. Dark/light UI, responsive on desktop and mobile.
 
 ## Features
-- **Google sign-in only** (no usernames or passwords). The Google ID token is verified on the server.
+- **Google sign-in only** via Firebase Authentication (no usernames or passwords). The Firebase ID token is verified on the server.
 - **Groups**: any user can create a group and share its 8-character invite code (or invite link `/?join=CODE`). Others join with the code. Chats and calls are per group, with a chat list, unread badges and call-in-progress indicator.
 - One login per account — signing in on another device (or a second tab) signs the old one out
 - Real-time chat: replies, reactions, emoji, link detection, day separators, unread pill
@@ -11,10 +11,12 @@ Private group chat with video calls. Dark/light UI, responsive on desktop and mo
 - Account page: photo, display name, theme, delete account (type DELETE)
 - WhatsApp-style dark/light UI, responsive. On phones the profile button is hidden from the chat header (open it from the chats drawer).
 
-## Google sign-in setup
-1. Google Cloud Console → APIs & Services → Credentials → **Create OAuth client ID** → type **Web application**.
-2. Add your site URL (e.g. `https://your-app.onrender.com`) to **Authorized JavaScript origins**.
-3. Set the client ID in the `GOOGLE_CLIENT_ID` environment variable.
+## Google sign-in (Firebase Authentication)
+1. Firebase console → **Build → Authentication → Get started → Sign-in method → Google → Enable** (choose a support email, Save).
+2. **Authentication → Settings → Authorized domains** → add your site domain (e.g. `your-app.onrender.com`). `localhost` is already there.
+3. **Project settings (gear) → General → Your apps → Add app → Web (`</>`)**. Copy the `apiKey` from the config it shows.
+4. Set the environment variable `FIREBASE_WEB_API_KEY` to that `apiKey`. (The web API key is not secret.)
+   Optional: `FIREBASE_AUTH_DOMAIN` if you use a custom auth domain (default `<project_id>.firebaseapp.com`).
 
 ## Firebase setup
 1. Create a Firebase project and a Firestore database (Native mode).
@@ -30,7 +32,7 @@ Environment variables
 | Name | Purpose |
 |---|---|
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | required — service account JSON |
-| `GOOGLE_CLIENT_ID` | required — Google OAuth web client ID |
+| `FIREBASE_WEB_API_KEY` | required — Firebase web app `apiKey` (enables Google sign-in) |
 | `SECRET_KEY` | long random string |
 | `ROOM_TITLE` | chat title (old `FFX-G` still works) |
 | `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL` | optional TURN server for calls on strict mobile/corporate networks |
@@ -40,10 +42,10 @@ Environment variables
 pip install -r requirements.txt
 LOCAL_DEV=1 python app.py      # http://localhost:5000  (data is not saved)
 ```
-Without `GOOGLE_CLIENT_ID`, local mode shows a clearly-marked **test sign-in** (name only). It is disabled whenever `GOOGLE_CLIENT_ID` is set or Firebase is used, so it never exists in production.
+Without `FIREBASE_WEB_API_KEY`, local mode shows a clearly-marked **test sign-in** (name only). It is disabled whenever `FIREBASE_WEB_API_KEY` is set or Firebase is used, so it never exists in production.
 
 ## Data model (Firestore)
-`chat_users` (accounts, key `g_<google sub>`), `chat_sessions`, `chat_groups/{gid}` (name, code, owner, members) with messages in `chat_groups/{gid}/messages` (no composite index needed).
+`chat_users` (accounts, key `fb_<firebase uid>`), `chat_sessions`, `chat_groups/{gid}` (name, code, owner, members) with messages in `chat_groups/{gid}/messages` (no composite index needed).
 
 ## Notes
 - Calls are peer-to-peer mesh: best for small groups (≤ 6). Without TURN some networks cannot connect.

@@ -7,7 +7,7 @@ Performance design
   * Avatars are served as cacheable images instead of being embedded in every message.
 
 Security design
-  * Google sign-in only (ID token verified on the server). One active login per account.
+  * Firebase Authentication (Google provider); the Firebase ID token is verified on the server. One active login per account.
   * Groups: private, joined with an invite code. Login/group rate limits, strict avatar validation, CSP and security headers.
 
 Run on a single worker/process (state is kept in memory).
@@ -46,8 +46,10 @@ AUTH_RECHECK = 300                           # seconds a verified token is trust
 HISTORY_SEND = 100                           # messages sent to a client on connect
 CACHE_LIMIT = 200                            # messages kept in memory
 MAX_AVATAR_BYTES = 300_000
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
-DEV_LOGIN = os.environ.get("LOCAL_DEV") == "1" and not GOOGLE_CLIENT_ID   # local testing only
+FIREBASE_WEB_API_KEY = os.environ.get("FIREBASE_WEB_API_KEY", "").strip()      # Firebase console > Project settings > Web app
+FIREBASE_AUTH_DOMAIN = os.environ.get("FIREBASE_AUTH_DOMAIN", "").strip()      # default: <project_id>.firebaseapp.com
+FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "").strip()
+DEV_LOGIN = os.environ.get("LOCAL_DEV") == "1" and not FIREBASE_WEB_API_KEY   # local testing only
 MAX_GROUPS_OWNED, MAX_GROUPS_JOINED, MAX_MEMBERS = 10, 30, 50
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 REACTIONS = ("👍", "❤️", "😂", "😮", "😢", "🔥")
@@ -359,6 +361,12 @@ def build_store():
 
 
 store = build_store()
+if not FIREBASE_PROJECT_ID:
+    try:
+        FIREBASE_PROJECT_ID = json.loads(os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "") or "{}").get("project_id", "")
+    except ValueError:
+        FIREBASE_PROJECT_ID = ""
+FIREBASE_AUTH_ON = bool(FIREBASE_WEB_API_KEY and store.kind == "firestore")
 io_pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="persist")
 seq_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="persist-seq")
 
@@ -887,10 +895,11 @@ def add_headers(resp):
         nonce = g.get("nonce")
         if nonce:
             resp.headers["Content-Security-Policy"] = (
-                "default-src 'self'; script-src 'self' 'nonce-%s' https://accounts.google.com/gsi/client; "
-                "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; "
+                "default-src 'self'; script-src 'self' 'nonce-%s' https://www.gstatic.com/firebasejs/ https://apis.google.com; "
+                "style-src 'self' 'unsafe-inline'; "
                 "img-src 'self' data: blob:; media-src 'self' blob:; "
-                "connect-src 'self' ws: wss: https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; "
+                "connect-src 'self' ws: wss: https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com; "
+                "frame-src https://*.firebaseapp.com https://accounts.google.com; "
                 "font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" % nonce)
     return resp
 
@@ -900,7 +909,9 @@ def add_headers(resp):
 def home():
     g.nonce = secrets.token_urlsafe(12)
     boot = {"title": ROOM_TITLE, "rtc": rtc_config(), "reactions": list(REACTIONS),
-            "google_client_id": GOOGLE_CLIENT_ID, "dev_login": DEV_LOGIN}
+            "firebase": ({"apiKey": FIREBASE_WEB_API_KEY, "projectId": FIREBASE_PROJECT_ID,
+                          "authDomain": FIREBASE_AUTH_DOMAIN or ("%s.firebaseapp.com" % FIREBASE_PROJECT_ID)} if FIREBASE_AUTH_ON else None),
+            "dev_login": DEV_LOGIN}
     return render_template("index.html", room_title=ROOM_TITLE, boot=boot, nonce=g.nonce)
 
 
@@ -925,19 +936,12 @@ def avatar(uid):
     return resp
 
 
-_g_request = None
-
-
-def verify_google(credential):
-    """Verify a Google Identity Services ID token and return its claims."""
-    global _g_request
-    from google.auth.transport import requests as g_requests
-    from google.oauth2 import id_token
-    if _g_request is None:
-        _g_request = g_requests.Request()
-    info = id_token.verify_oauth2_token(credential, _g_request, GOOGLE_CLIENT_ID)
-    if info.get("iss") not in ("accounts.google.com", "https://accounts.google.com"):
-        raise ValueError("bad issuer")
+def verify_firebase(id_token):
+    """Verify a Firebase Authentication ID token (Google provider) and return its claims."""
+    from firebase_admin import auth
+    info = auth.verify_id_token(id_token)
+    if (info.get("firebase") or {}).get("sign_in_provider") != "google.com":
+        raise ValueError("not a Google sign-in")
     if not info.get("email_verified"):
         raise ValueError("email not verified")
     return info
@@ -979,27 +983,27 @@ def finish_login(key, name, username, email="", picture=""):
 
 @app.post("/api/google")
 def google_login():
+    """Body: {credential: <Firebase ID token>} obtained after signInWithPopup(GoogleAuthProvider)."""
     if not login_gate.hit("g|" + (request.remote_addr or "?"), 20, 300):
         return api_error("Too many attempts. Please wait a few minutes and try again.", 429)
-    if not GOOGLE_CLIENT_ID:
+    if not FIREBASE_AUTH_ON:
         return api_error("Google sign-in is not configured on this server.", 503)
     cred = str(body().get("credential") or "")
-    if not cred or len(cred) > 4096:
+    if not cred or len(cred) > 8192:
         return api_error("Google sign-in failed. Please try again.", 401)
     try:
-        info = verify_google(cred)
+        info = verify_firebase(cred)
     except Exception as exc:
-        log.info("google token rejected: %s", exc)
+        log.info("firebase token rejected: %s", exc)
         return api_error("Google sign-in failed. Please try again.", 401)
     email = str(info.get("email") or "")
-    handle = re.sub(r"[^A-Za-z0-9_.]", "", email.split("@")[0])[:20] or "member"
-    name = clean_spaces(info.get("name")) or handle
-    return finish_login("g_" + str(info["sub"]), name, "", email, str(info.get("picture") or ""))
+    name = clean_spaces(info.get("name")) or re.sub(r"[^A-Za-z0-9_.]", "", email.split("@")[0])[:20] or "Member"
+    return finish_login("fb_" + str(info["uid"]), name, "", email, str(info.get("picture") or ""))
 
 
 @app.post("/api/dev-login")
 def dev_login():
-    """Local testing only (LOCAL_DEV=1 and no GOOGLE_CLIENT_ID). Never available in production."""
+    """Local testing only (LOCAL_DEV=1 and no FIREBASE_WEB_API_KEY). Never available in production."""
     if not DEV_LOGIN:
         return api_error("Not found", 404)
     name = clean_spaces(body().get("name"))[:40]

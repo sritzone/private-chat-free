@@ -415,3 +415,5 @@ html[data-theme=light] .to-bottom{background:#fff}
 .gi-members b{font-weight:500;display:block}.gi-members small{color:var(--muted)}
 .g-wrap{display:flex;justify-content:center;margin:20px 0 8px;min-height:44px}.g-wrap.busy{opacity:.55;pointer-events:none}
 .auth-card code{font-size:.9em;background:var(--surface-3);padding:1px 5px;border-radius:5px}
+.g-btn{display:inline-flex;align-items:center;justify-content:center;gap:12px;width:100%;max-width:320px;height:48px;border-radius:999px;border:1px solid #dadce0;background:#fff;color:#1f1f1f;font-weight:600;font-size:15px;transition:box-shadow .15s,background .15s}
+.g-btn:hover{background:#f8f9fa;box-shadow:0 1px 4px rgba(0,0,0,.25)}.g-btn svg{width:20px;height:20px}
