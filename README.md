@@ -70,3 +70,9 @@ Without `FIREBASE_WEB_API_KEY`, local mode shows a clearly-marked **test sign-in
 
 Firestore collections: `chat_users`, `chat_sessions`, `chat_groups/{gid}/messages`, `chat_usernames`.
 In local mode (`LOCAL_DEV=1`) the test sign-in name **Admin** is an admin.
+
+## Profiles, verification and orders (v4)
+- Usernames are **5-20 characters** (`a-z`, `0-9`, `_`, `-`) and unique.
+- Profiles: name, username, gender, location, hobbies, languages, occupation and a 160-character bio. Members can open each other's profile (read-only) by tapping an avatar or a member name; you can only view people who share a group with you.
+- **Verified badge**: users tap *Request* on their profile; the admin approves in *Admin panel -> Verification requests* (or toggles *Verify* on any user). The blue badge then shows next to the name everywhere.
+- **Stone orders**: choosing a pack in the Stone Store records an order and opens Telegram. The admin sees it under *Stone orders* and adds the Stone with one tap.

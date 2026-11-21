@@ -66,7 +66,11 @@ MEMBER_EXTEND_STEP = _env_int("MEMBER_EXTEND_STEP", 25)   # extra members per pu
 MEMBER_EXTEND_COST = _env_int("MEMBER_EXTEND_COST", 10)   # Stone per purchase
 MAX_MEMBER_LIMIT = _env_int("MAX_MEMBER_LIMIT", 200)
 MAX_GROUPS_JOINED, MAX_PENDING = 30, 50
-USERNAME_RE = re.compile(r"[a-z0-9_-]{3,12}")
+USERNAME_RE = re.compile(r"[a-z0-9_-]{5,20}")
+LEGACY_USERNAME_RE = re.compile(r"[a-z0-9_-]{3,20}")
+STONE_PACKS = (10, 25, 50, 100, 250)
+GENDERS = ("male", "female", "other")
+PROFILE_FIELDS = {"location": 40, "hobby": 80, "languages": 60, "occupation": 50, "bio": 160}
 RESERVED_USERNAMES = {"system", "support", "root"}
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 REACTIONS = ("👍", "❤️", "😂", "😮", "😢", "🔥")
@@ -530,6 +534,11 @@ def dir_put(key, prof):
             "email": str(prof.get("email", "")), "created_at": prof.get("created_at", 0),
             "stones": int(prof.get("stones", 0) or 0), "extra_slots": int(prof.get("extra_slots", 0) or 0),
             "stone_log": list(prof.get("stone_log") or []), "show_active": prof.get("show_active", True) is not False,
+            "gender": prof.get("gender", "") if prof.get("gender") in GENDERS else "",
+            "location": prof.get("location", ""), "hobby": prof.get("hobby", ""), "languages": prof.get("languages", ""),
+            "occupation": prof.get("occupation", ""), "bio": prof.get("bio", ""),
+            "verified": bool(prof.get("verified", False)), "verify_requested": bool(prof.get("verify_requested", False)),
+            "order": prof.get("order") if isinstance(prof.get("order"), dict) else None,
             "avatar_mime": mime, "avatar_raw": raw, "avatar_ver": ver}
     with dir_lock:
         directory[uid] = info
@@ -578,7 +587,25 @@ def public_user(uid):
     info = directory[uid]
     return {"id": uid, "name": info["name"], "username": info["username"], "avatar": avatar_url(uid),
             "created_at": info["created_at"], "stones": info["stones"], "show_active": info["show_active"],
-            "is_admin": is_admin(uid), "owned": owned_count(uid), "slots": slot_limit(uid)}
+            "is_admin": is_admin(uid), "owned": owned_count(uid), "slots": slot_limit(uid),
+            "verified": info["verified"], "verify_requested": info["verify_requested"], "order": info["order"],
+            "gender": info["gender"], "location": info["location"], "hobby": info["hobby"], "languages": info["languages"],
+            "occupation": info["occupation"], "bio": info["bio"]}
+
+
+def shares_group(a_uid, b_uid):
+    with groups_lock:
+        return bool(user_groups.get(a_uid, set()) & user_groups.get(b_uid, set()))
+
+
+def public_profile(uid):
+    """What other members may see (never the email, Stone or orders)."""
+    info = directory[uid]
+    return {"id": uid, "name": info["name"], "username": info["username"], "avatar": avatar_url(uid),
+            "verified": info["verified"], "gender": info["gender"], "location": info["location"], "hobby": info["hobby"],
+            "languages": info["languages"], "occupation": info["occupation"], "bio": info["bio"],
+            "created_at": info["created_at"], "online": uid in online_uids(),
+            "groups": len(user_groups.get(uid, ()))}
 
 
 def valid_username(u):
@@ -586,17 +613,18 @@ def valid_username(u):
 
 
 def make_username(name, email, uid):
-    """Claim a unique username (a-z, 0-9, _ -, 3-12 chars) derived from the display name."""
-    base = re.sub(r"[^a-z0-9]", "", str(name).casefold())[:8]
-    if len(base) < 3:
-        base = re.sub(r"[^a-z0-9]", "", str(email).split("@")[0].casefold())[:8]
-    if len(base) < 3:
-        base = "user"
+    """Claim a unique username (a-z, 0-9, _ -, 5-20 chars) derived from the display name."""
+    base = re.sub(r"[^a-z0-9]", "", str(name).casefold())[:14]
+    if len(base) < 5:
+        base = (base + re.sub(r"[^a-z0-9]", "", str(email).split("@")[0].casefold()))[:14]
+    if len(base) < 5:
+        base = (base or "user") + "".join(secrets.choice("0123456789") for _ in range(5 - len(base or "user")))
     for attempt in range(40):
-        cand = base if attempt == 0 else base[:12 - (2 + attempt // 10)] + "".join(secrets.choice("0123456789") for _ in range(2 + attempt // 10))
+        digits = 0 if attempt == 0 else 2 + attempt // 10
+        cand = base[:20 - digits] + "".join(secrets.choice("0123456789") for _ in range(digits))
         if valid_username(cand) and store.claim_username(cand, uid):
             return cand
-    cand = "u" + secrets.token_hex(5)
+    cand = "user" + secrets.token_hex(6)
     store.claim_username(cand, uid)
     return cand
 
@@ -805,7 +833,8 @@ def msg_out(gid, m):
     src = info or m
     return {"id": m["id"], "gid": gid, "uid": uid, "name": src.get("name", ""), "username": src.get("username", ""),
             "text": m.get("text", ""), "ts": m.get("ts", 0), "kind": m.get("kind", "user"),
-            "avatar": avatar_url(uid) if info else "", "reactions": m.get("reactions") or {},
+            "avatar": avatar_url(uid) if info else "", "verified": bool(info and info.get("verified")),
+            "reactions": m.get("reactions") or {},
             "reply_to": m.get("reply_to")}
 
 
@@ -870,7 +899,8 @@ def group_public(gid):
     for uid in g["members"]:
         info = directory.get(uid) or info_for(uid)
         if info:
-            members.append({"id": uid, "name": info["name"], "username": info["username"], "avatar": avatar_url(uid)})
+            members.append({"id": uid, "name": info["name"], "username": info["username"], "avatar": avatar_url(uid),
+                            "verified": info["verified"]})
     on = online_uids()
     return {"id": gid, "name": g["name"], "code": g["code"], "owner": g["owner"], "created_at": g["created_at"],
             "avatar": group_avatar_url(g), "approval": g["approval"], "public": g["public"],
@@ -1001,7 +1031,7 @@ def stone_change(uid, delta=None, set_to=None, why=""):
 def push_wallet(uid):
     me_ = public_user(uid)
     for sid in sids_of(uid):
-        socketio.emit("wallet_updated", {"stones": me_["stones"], "owned": me_["owned"], "slots": me_["slots"]}, to=sid)
+        socketio.emit("wallet_updated", {k: me_[k] for k in ("stones", "owned", "slots", "verified", "verify_requested", "order")}, to=sid)
 
 
 # --------------------------------------------------------------------------- HTTP helpers
@@ -1074,7 +1104,7 @@ def home():
     boot = {"title": ROOM_TITLE, "rtc": rtc_config(), "reactions": list(REACTIONS),
             "firebase": ({"apiKey": FIREBASE_WEB_API_KEY, "projectId": FIREBASE_PROJECT_ID,
                           "authDomain": FIREBASE_AUTH_DOMAIN or ("%s.firebaseapp.com" % FIREBASE_PROJECT_ID)} if FIREBASE_AUTH_ON else None),
-            "dev_login": DEV_LOGIN, "telegram": TELEGRAM_ADMIN,
+            "dev_login": DEV_LOGIN, "telegram": TELEGRAM_ADMIN, "packs": list(STONE_PACKS),
             "limits": {"free_groups": FREE_GROUPS, "slot_cost": GROUP_SLOT_COST, "base_members": BASE_MEMBER_LIMIT,
                        "members_step": MEMBER_EXTEND_STEP, "members_cost": MEMBER_EXTEND_COST, "max_members": MAX_MEMBER_LIMIT}}
     return render_template("index.html", room_title=ROOM_TITLE, boot=boot, nonce=g.nonce)
@@ -1162,7 +1192,7 @@ def finish_login(key, name, email="", picture=""):
     else:
         uid = prof.get("uid") or key
         fix = {}
-        if not valid_username(str(prof.get("username") or "")):      # accounts made before usernames existed
+        if not LEGACY_USERNAME_RE.fullmatch(str(prof.get("username") or "")):      # accounts made before usernames existed
             fix["username"] = make_username(prof.get("name") or name, email, uid)
         if email and prof.get("email") != email:
             fix["email"] = email
@@ -1216,6 +1246,13 @@ def me():
     return jsonify(me=public_user(e["uid"]))
 
 
+def broadcast_profile(uid):
+    info = directory[uid]
+    payload = {"id": uid, "name": info["name"], "username": info["username"], "avatar": avatar_url(uid), "verified": info["verified"]}
+    for gid in list(user_groups.get(uid, ())):
+        socketio.emit("profile_updated", payload, to=room(gid))
+
+
 @app.post("/api/profile")
 def update_profile():
     d = body()
@@ -1240,11 +1277,22 @@ def update_profile():
         fields["avatar"] = avatar_data
     if "show_active" in d:
         fields["show_active"] = bool(d.get("show_active"))
+    if "gender" in d:
+        g_ = str(d.get("gender") or "").lower()
+        if g_ and g_ not in GENDERS:
+            return api_error("Choose a valid gender option.")
+        fields["gender"] = g_
+    for k_, limit_ in PROFILE_FIELDS.items():
+        if k_ in d:
+            v_ = clean_spaces(d.get(k_))
+            if len(v_) > limit_:
+                return api_error("%s is too long (maximum %d characters)." % (k_.capitalize(), limit_))
+            fields[k_] = v_
     old_username = info["username"]
     if "username" in d:
         new = str(d.get("username") or "").strip().lower()
         if not valid_username(new):
-            return api_error("Username must be 3-12 characters: small letters, numbers, _ or -")
+            return api_error("Username must be 5-20 characters: small letters, numbers, _ or -")
         if new != old_username:
             if not uname_gate.hit(uid, 5, 3600):
                 return api_error("You changed your username too many times. Try again later.", 429)
@@ -1265,16 +1313,14 @@ def update_profile():
         except Exception:
             log.exception("releasing old username failed")
     with dir_lock:
-        for k in ("name", "show_active", "username"):
+        for k in ("name", "show_active", "username", "gender", *PROFILE_FIELDS):
             if k in fields:
                 info[k] = fields[k]
         if "avatar" in fields:
             parsed = decode_avatar(fields["avatar"])
             info["avatar_mime"], info["avatar_raw"] = parsed if parsed else (None, None)
             info["avatar_ver"] = hashlib.sha1(info["avatar_raw"]).hexdigest()[:10] if parsed else ""
-    payload = {"id": uid, "name": info["name"], "username": info["username"], "avatar": avatar_url(uid)}
-    for gid in list(user_groups.get(uid, ())):
-        socketio.emit("profile_updated", payload, to=room(gid))
+    broadcast_profile(uid)
     if "show_active" in fields:
         emit_user_presence(uid)
     return jsonify(me=public_user(uid))
@@ -1395,6 +1441,53 @@ def extend_members():
     return jsonify(me=public_user(uid), group=group_public(gid))
 
 
+@app.post("/api/user")
+def view_user():
+    d, uid = _auth_json()
+    if not uid:
+        return api_error("Session expired. Please sign in again.", 401)
+    target = str(d.get("uid") or "")[:64]
+    if target not in directory:
+        return api_error("User not found", 404)
+    allowed = target == uid or is_admin(uid) or shares_group(uid, target)
+    if not allowed:
+        with groups_lock:
+            allowed = any(groups[g_]["owner"] == uid and target in groups[g_]["pending"] for g_ in user_groups.get(uid, ()) if g_ in groups)
+    if not allowed:
+        return api_error("You can only view profiles of people in your groups.", 403)
+    return jsonify(profile=public_profile(target))
+
+
+@app.post("/api/stone-order")
+def stone_order():
+    d, uid = _auth_json()
+    if not uid:
+        return api_error("Session expired. Please sign in again.", 401)
+    try:
+        pack = int(d.get("pack"))
+    except (TypeError, ValueError):
+        pack = 0
+    if pack not in STONE_PACKS:
+        return api_error("Choose a valid pack.")
+    info = directory[uid]
+    info["order"] = {"pack": pack, "ts": now_ms()}
+    store.update_user(info["key"], {"order": info["order"]})
+    return jsonify(me=public_user(uid))
+
+
+@app.post("/api/verify-request")
+def verify_request():
+    d, uid = _auth_json()
+    if not uid:
+        return api_error("Session expired. Please sign in again.", 401)
+    info = directory[uid]
+    if info["verified"]:
+        return api_error("Your account is already verified.")
+    info["verify_requested"] = True
+    store.update_user(info["key"], {"verify_requested": True})
+    return jsonify(me=public_user(uid))
+
+
 def _admin_uid():
     d, uid = _auth_json()
     if not uid:
@@ -1408,7 +1501,9 @@ def _admin_uid():
 
 def _admin_row(info):
     return {"id": info["uid"], "name": info["name"], "username": info["username"], "email": info.get("email", ""),
-            "avatar": avatar_url(info["uid"]), "stones": info["stones"], "groups": len(user_groups.get(info["uid"], ()))}
+            "avatar": avatar_url(info["uid"]), "stones": info["stones"], "groups": len(user_groups.get(info["uid"], ())),
+            "verified": info["verified"], "verify_requested": info["verify_requested"], "order": info["order"],
+            "created_at": info["created_at"]}
 
 
 @app.post("/api/admin/users")
@@ -1417,12 +1512,68 @@ def admin_users():
     if err:
         return err
     q = clean_spaces(d.get("q")).casefold().lstrip("@")[:60]
+    flt = str(d.get("filter") or "all")
     with dir_lock:
         rows = list(directory.values())
+    if flt == "verified":
+        rows = [i for i in rows if i["verified"]]
+    elif flt == "pending":
+        rows = [i for i in rows if i["order"] or i["verify_requested"]]
     if q:
         rows = [i for i in rows if q in i["name"].casefold() or q in i["username"] or q in i.get("email", "").casefold()]
     rows.sort(key=lambda i: (i["name"].casefold(), i["username"]))
-    return jsonify(total=len(directory), users=[_admin_row(i) for i in rows[:40]])
+    return jsonify(total=len(rows), users=[_admin_row(i) for i in rows[:40]])
+
+
+@app.post("/api/admin/overview")
+def admin_overview():
+    d, uid, err = _admin_uid()
+    if err:
+        return err
+    with dir_lock:
+        rows = list(directory.values())
+    orders = sorted((i for i in rows if i["order"]), key=lambda i: i["order"]["ts"])
+    reqs = [i for i in rows if i["verify_requested"] and not i["verified"]]
+    return jsonify(stats={"users": len(rows), "verified": sum(1 for i in rows if i["verified"]),
+                          "stones": sum(i["stones"] for i in rows), "groups": len(groups), "online": len(online_uids())},
+                   orders=[_admin_row(i) for i in orders], requests=[_admin_row(i) for i in reqs])
+
+
+@app.post("/api/admin/verify")
+def admin_verify():
+    d, uid, err = _admin_uid()
+    if err:
+        return err
+    target = str(d.get("uid") or "")[:64]
+    if target not in directory:
+        return api_error("User not found", 404)
+    info = directory[target]
+    on = bool(d.get("verified"))
+    info["verified"], info["verify_requested"] = on, False
+    store.update_user(info["key"], {"verified": on, "verify_requested": False})
+    broadcast_profile(target)
+    push_wallet(target)
+    log.info("admin %s: verified=%s for %s", directory[uid]["username"], on, info["username"])
+    return jsonify(user=_admin_row(info))
+
+
+@app.post("/api/admin/dismiss")
+def admin_dismiss():
+    d, uid, err = _admin_uid()
+    if err:
+        return err
+    target = str(d.get("uid") or "")[:64]
+    if target not in directory:
+        return api_error("User not found", 404)
+    info, what = directory[target], d.get("what")
+    if what == "order":
+        info["order"] = None
+        store.update_user(info["key"], {"order": None})
+    elif what == "verify":
+        info["verify_requested"] = False
+        store.update_user(info["key"], {"verify_requested": False})
+    push_wallet(target)
+    return jsonify(user=_admin_row(info))
 
 
 @app.post("/api/admin/stone")
@@ -1442,6 +1593,8 @@ def admin_stone():
         return api_error("Invalid amount.")
     note = clean_spaces(d.get("note"))[:30]
     why = "Admin " + ("adjustment" if op == "add" else "set") + (" - " + note if note else "")
+    if d.get("fulfil_order") and directory[target]["order"]:
+        why = "Purchase: %d Stone" % directory[target]["order"]["pack"]
     try:
         if op == "add":
             stone_change(target, delta=amount, why=why)
@@ -1451,6 +1604,10 @@ def admin_stone():
             stone_change(target, set_to=amount, why=why)
     except ValueError:
         return api_error("This would make the balance negative.")
+    if d.get("fulfil_order") and directory[target]["order"]:
+        directory[target]["order"] = None
+        store.update_user(directory[target]["key"], {"order": None})
+        push_wallet(target)
     log.info("admin %s: %s %s %s -> %s", directory[uid]["username"], op, amount, directory[target]["username"], directory[target]["stones"])
     return jsonify(user=_admin_row(directory[target]))
 
@@ -1530,7 +1687,8 @@ def on_create_group(data=None):
             return _fail("You can create %d groups for free. Unlock one more group slot with %d Stone." % (FREE_GROUPS, GROUP_SLOT_COST), "slots")
         gid, code = uuid.uuid4().hex, new_code()
     doc = {"name": name, "code": code, "owner": uid, "members": [uid], "created_at": now_ms(),
-           "approval": False, "public": True, "member_limit": BASE_MEMBER_LIMIT, "pending": []}
+           "approval": bool((data or {}).get("approval")) if isinstance(data, dict) else False, "public": True,
+           "member_limit": BASE_MEMBER_LIMIT, "pending": []}
     try:
         store.create_group(gid, doc)
     except Exception:
@@ -1634,7 +1792,8 @@ def on_get_requests(data=None):
     for uid in list(groups[gid]["pending"]):
         info = directory.get(uid) or info_for(uid)
         if info:
-            rows.append({"id": uid, "name": info["name"], "username": info["username"], "avatar": avatar_url(uid)})
+            rows.append({"id": uid, "name": info["name"], "username": info["username"], "avatar": avatar_url(uid),
+                         "verified": info["verified"]})
     return {"ok": True, "requests": rows}
 
 

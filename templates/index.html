@@ -25,13 +25,15 @@
     <h1>Talk, call and stay <em>connected</em>.</h1>
     <p>A private space for your people: real-time group chat, crystal-clear video calls and a profile that is truly yours.</p>
     <ul class="features">
-      <li><span class="ico" data-ico="chat"></span>Create private groups and invite friends with a code</li>
-      <li><span class="ico" data-ico="video"></span>Group video &amp; voice calls in your browser</li>
-      <li><span class="ico" data-ico="shield"></span>Google sign-in &mdash; no passwords to remember</li>
-    </ul>
+        <li><span class="ico" data-ico="chat"></span><div><b>Private groups</b><small>Create a group, share the invite code, chat in real time.</small></div></li>
+        <li><span class="ico" data-ico="video"></span><div><b>Video &amp; voice calls</b><small>Crystal-clear group calls right in your browser.</small></div></li>
+        <li><span class="ico" data-ico="shield"></span><div><b>Verified members</b><small>Real profiles with a blue badge you can trust.</small></div></li>
+        <li><span class="ico" data-ico="gem"></span><div><b>Stone upgrades</b><small>Unlock more groups and bigger member limits.</small></div></li>
+      </ul>
   </section>
   <section class="auth-card">
-    <h2 id="authTitle">Welcome</h2>
+    <div class="auth-logo"><img class="logo-img big" src="{{ url_for('static', filename='logo.png') }}" alt=""></div>
+    <h2 id="authTitle">Welcome back</h2>
     <p class="sub" id="authDesc">Sign in with your Google account to continue.</p>
     <div class="g-wrap" id="googleWrap" hidden><button class="g-btn" id="googleBtn" type="button"><svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.6 5.9c4.4-4.1 7-10.1 7-17.6z"/><path fill="#FBBC05" d="M10.5 28.7A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.2.9-4.7l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.8l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2.1 1.4-4.9 2.3-8.3 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.1C6.5 42.6 14.6 48 24 48z"/></svg><span>Continue with Google</span></button></div>
     <form id="devForm" hidden novalidate>
@@ -56,7 +58,7 @@
     </div>
     <div class="side-title"><span>Chats</span><span id="chatCount">0</span></div>
     <ul class="chats" id="chatList"></ul>
-    <div class="side-foot"><button class="me-chip" id="meChip" type="button" aria-label="Open my account"></button></div>
+    <div class="side-foot"><button class="me-chip" id="meChip" type="button" aria-label="Open my account"></button><button class="icon-btn so-btn" id="sideSignOut" type="button" aria-label="Sign out" title="Sign out"><span class="ico" data-ico="logout"></span></button></div>
   </aside>
   <div class="scrim" id="scrim"></div>
 
@@ -76,7 +78,7 @@
         <img class="logo-img big" src="{{ url_for('static', filename='logo.png') }}" alt="" width="46" height="46">
         <h2 id="welcomeTitle">Start your first group</h2>
         <p id="welcomeText">Create a private group and share its invite code, or join a friend's group with their code.</p>
-        <div class="row"><button class="btn primary lg" id="wCreate" type="button"><span class="ico" data-ico="plus"></span>Create group</button><button class="btn lg" id="wJoin" type="button"><span class="ico" data-ico="users"></span>Join with code</button></div>
+        <div class="row"><button class="btn primary lg" id="wFind" type="button"><span class="ico" data-ico="search"></span>Find groups</button><button class="btn lg" id="wCreate" type="button"><span class="ico" data-ico="plus"></span>Create</button><button class="btn lg" id="wJoin" type="button"><span class="ico" data-ico="key"></span>Join with code</button></div>
       </div>
     </div>
 
@@ -94,60 +96,44 @@
     <!-- Account / profile page -->
     <div class="account" id="accountView" hidden>
       <div class="acc-wrap">
-        <button class="btn ghost" id="accBack" type="button"><span class="ico" data-ico="back"></span>Back to chat</button>
-        <div class="acc-hero">
-          <div class="cover"></div>
-          <div class="acc-id">
-            <div class="avatar-wrap"><div class="avatar xl" id="accAvatar"></div><button class="cam-btn" id="accPhotoBtn" type="button" aria-label="Change profile photo"><span class="ico" data-ico="camera"></span></button></div>
-            <div class="who"><h2 id="accName"></h2><p id="accHandle">@username</p><span class="pill ok" id="accPill"><span class="dot"></span>Online</span></div>
-            <button class="btn" id="signOutBtn" type="button"><span class="ico" data-ico="logout"></span>Sign out</button>
+        <button class="btn ghost back" id="accBack" type="button"><span class="ico" data-ico="back"></span>Back to chats</button>
+
+        <section class="pf-card">
+          <div class="pf-cover"></div>
+          <div class="pf-body">
+            <div class="pf-avatar"><div class="avatar xl" id="accAvatar"></div><button class="cam-btn" id="accPhotoBtn" type="button" aria-label="Change profile photo"><span class="ico" data-ico="camera"></span></button></div>
+            <div class="pf-main">
+              <h2 id="accName"></h2>
+              <p class="pf-user" id="accHandle"></p>
+              <p class="pf-bio" id="accBio"></p>
+              <div class="pf-chips" id="accChips"></div>
+            </div>
+            <button class="btn primary" id="editProfileBtn" type="button"><span class="ico" data-ico="edit"></span>Edit profile</button>
           </div>
-        </div>
-        <div class="acc-grid">
-          <section class="card">
-            <h3>Profile</h3><p class="d">Your display name and username are shown in chats and calls.</p>
-            <form id="nameForm" novalidate>
-              <label class="field"><span>Display name</span><input id="accNameInput" maxlength="40" autocomplete="name"></label>
-              <button class="btn primary" id="nameSave" type="submit"><span class="spin"></span><span class="label">Save name</span></button>
-            </form>
-            <form id="unameForm" novalidate style="margin-top:20px">
-              <label class="field"><span>Username</span><div class="at-input"><i>@</i><input id="accUnameInput" maxlength="12" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="username"></div></label>
-              <p class="hint">3-12 characters. Small letters, numbers, <b>_</b> and <b>-</b> only. Must be unique.</p>
-              <button class="btn primary" id="unameSave" type="submit"><span class="spin"></span><span class="label">Save username</span></button>
-            </form>
-          </section>
-          <section class="card wallet">
-            <h3>Stone wallet</h3><p class="d">Stone unlocks extra groups and bigger member limits.</p>
-            <div class="bal"><span class="gem" aria-hidden="true"></span><b id="walletBal">0</b><small>Stone</small></div>
+          <input id="avatarFile" type="file" accept="image/jpeg,image/png,image/webp,image/*" hidden>
+        </section>
+
+        <div class="acc-cols">
+          <section class="panel wallet-card">
+            <div class="wc-head"><span class="wc-ico"><span class="gem"></span></span><div><h3>Stone wallet</h3><p>Unlock groups &amp; member limits</p></div></div>
+            <div class="bal"><b id="walletBal">0</b><small>Stone</small></div>
+            <div class="wc-order" id="walletOrder" hidden></div>
             <div class="row"><button class="btn primary" id="buyStoneBtn" type="button"><span class="ico" data-ico="gem"></span>Buy Stone</button><button class="btn" id="historyBtn" type="button">History</button></div>
             <p class="hint" id="walletHint"></p>
           </section>
-          <section class="card">
-            <h3>Privacy</h3><p class="d">Control what other members can see.</p>
-            <label class="switch-row"><span><b>Show when I am active</b><small>When off, you appear offline to everyone.</small></span><span class="switch"><input type="checkbox" id="activeSwitch"><i></i></span></label>
+
+          <section class="panel list">
+            <h3 class="panel-title">Account</h3>
+            <div class="set-row"><span class="si"><span class="ico" data-ico="shield"></span></span><div class="sd"><b>Verification</b><small id="verifyText">Get the blue badge next to your name.</small></div><button class="btn sm" id="verifyBtn" type="button">Request</button></div>
+            <label class="set-row"><span class="si"><span class="ico" data-ico="eye"></span></span><div class="sd"><b>Show when I am active</b><small>When off, you appear offline to everyone.</small></div><span class="switch"><input type="checkbox" id="activeSwitch"><i></i></span></label>
+            <div class="set-row"><span class="si"><span class="ico" data-ico="moon"></span></span><div class="sd"><b>Appearance</b><small>Dark or light theme</small></div><div class="seg mini" id="themeSeg"><button type="button" data-theme="dark"><span class="ico" data-ico="moon"></span></button><button type="button" data-theme="light"><span class="ico" data-ico="sun"></span></button></div></div>
+            <button class="set-row link" id="adminOpenBtn" type="button" hidden><span class="si gold"><span class="ico" data-ico="shield"></span></span><div class="sd"><b>Admin panel</b><small>Manage Stone, orders and verification</small></div><span class="ico chev" data-ico="chev"></span></button>
           </section>
-          <section class="card">
-            <h3>Profile photo</h3><p class="d">JPG, PNG or WebP. Your photo is cropped to a square and optimised automatically.</p>
-            <div class="row"><button class="btn primary" id="uploadBtn" type="button"><span class="ico" data-ico="camera"></span>Upload photo</button><button class="btn" id="removePhotoBtn" type="button">Remove</button></div>
-            <input id="avatarFile" type="file" accept="image/jpeg,image/png,image/webp,image/*" hidden>
-          </section>
-          <section class="card" id="adminCard" hidden>
-            <h3>Admin</h3><p class="d">Add or edit users' Stone.</p>
-            <button class="btn primary" id="adminOpenBtn" type="button"><span class="ico" data-ico="shield"></span>Open admin panel</button>
-          </section>
-          <section class="card">
-            <h3>Sign-in</h3><p class="d">You sign in with your Google account, so there is no password to manage here.</p>
-            <div class="note-box"><span class="ico" data-ico="shield"></span><span>One account, one device. Signing in somewhere else signs this device out.</span></div>
-          </section>
-          <section class="card">
-            <h3>Appearance</h3><p class="d">Pick the look that is easiest on your eyes.</p>
-            <div class="seg" id="themeSeg"><button type="button" data-theme="dark"><span class="ico" data-ico="moon"></span>Dark</button><button type="button" data-theme="light"><span class="ico" data-ico="sun"></span>Light</button></div>
-            <h3 style="margin-top:26px">Account details</h3>
-            <dl class="kv" style="margin-top:12px"><dt>Member since</dt><dd id="kvSince"></dd><dt>Status</dt><dd>Signed in on this device</dd></dl>
-          </section>
-          <section class="card danger wide">
-            <h3>Delete account</h3><p class="d">Permanently deletes your account, sessions and all of your messages in every group. This cannot be undone.</p>
-            <button class="btn danger" id="deleteBtn" type="button"><span class="ico" data-ico="trash"></span>Delete my account</button>
+
+          <section class="panel list">
+            <h3 class="panel-title">Session</h3>
+            <button class="set-row link" id="signOutBtn" type="button"><span class="si"><span class="ico" data-ico="logout"></span></span><div class="sd"><b>Sign out</b><small>One account, one device</small></div><span class="ico chev" data-ico="chev"></span></button>
+            <button class="set-row link danger" id="deleteBtn" type="button"><span class="si red"><span class="ico" data-ico="trash"></span></span><div class="sd"><b>Delete account</b><small>Permanently remove your data</small></div><span class="ico chev" data-ico="chev"></span></button>
           </section>
         </div>
       </div>
@@ -155,14 +141,19 @@
 
     <!-- Admin panel -->
     <div class="account" id="adminView" hidden>
-      <div class="acc-wrap">
-        <button class="btn ghost" id="adminBack" type="button"><span class="ico" data-ico="back"></span>Back to profile</button>
-        <div class="card admin">
-          <h3>Admin panel</h3><p class="d">Search a user, then add or set their Stone balance. Changes apply instantly.</p>
+      <div class="acc-wrap wide">
+        <button class="btn ghost back" id="adminBack" type="button"><span class="ico" data-ico="back"></span>Back to profile</button>
+        <div class="ad-head"><div><h2>Admin panel</h2><p>Manage Stone, orders and verification.</p></div><button class="btn sm" id="adminRefresh" type="button"><span class="ico" data-ico="refresh"></span>Refresh</button></div>
+        <div class="stat-grid" id="adminStats"></div>
+        <section class="panel" id="adminOrdersBox" hidden><h3 class="panel-title">Stone orders <span class="count" id="ordersCount"></span></h3><ul class="queue" id="adminOrders"></ul></section>
+        <section class="panel" id="adminVerifyBox" hidden><h3 class="panel-title">Verification requests <span class="count" id="verifyCount"></span></h3><ul class="queue" id="adminVerify"></ul></section>
+        <section class="panel">
+          <h3 class="panel-title">Users</h3>
           <div class="search-box"><span class="ico" data-ico="search"></span><input id="adminSearch" placeholder="Search name, @username or email" autocomplete="off"></div>
+          <div class="chips" id="adminFilters"><button type="button" class="on" data-f="all">All</button><button type="button" data-f="verified">Verified</button><button type="button" data-f="pending">Pending</button></div>
           <p class="hint" id="adminCount"></p>
           <ul class="admin-list" id="adminList"></ul>
-        </div>
+        </section>
       </div>
     </div>
   </section>

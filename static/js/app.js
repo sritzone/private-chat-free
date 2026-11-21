@@ -68,6 +68,18 @@ const I = {
   gem: svg('<path d="M6 3h12l4 6-10 12L2 9z"/><path d="M2 9h20M9 3l-2 6 5 12 5-12-2-6"/>'),
   search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
   settings: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
+  edit: svg('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>'),
+  eye: svg('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
+  chev: svg('<path d="m9 6 6 6-6 6"/>'),
+  refresh: svg('<path d="M3 12a9 9 0 0 1 15.5-6.2L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.5 6.2L3 16M3 21v-5h5"/>'),
+  pin: svg('<path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11z"/><circle cx="12" cy="10" r="2.5"/>'),
+  key: svg('<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3"/>'),
+  link: svg('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>'),
+  copy: svg('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>'),
+  user: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'),
+  heart: svg('<path d="M12 21s-7.5-4.6-9.3-9.2C1.4 8.3 3.4 5 6.6 5c2 0 3.5 1.1 5.4 3 1.9-1.9 3.4-3 5.4-3 3.2 0 5.2 3.3 3.9 6.8C19.5 16.4 12 21 12 21z"/>'),
+  briefcase: svg('<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M3 13h18"/>'),
+  clock: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
   end: svg('<path d="M3.5 14.5c5-4.5 12-4.5 17 0l-2.4 3a1.6 1.6 0 0 1-2.1.4l-2.1-1.3a3 3 0 0 0-3.2 0l-2.1 1.3a1.6 1.6 0 0 1-2.1-.4l-3-3z"/>')
 };
 const ico = name => h('span', { class: 'ico', html: I[name] });
@@ -226,17 +238,25 @@ function enter(data) {
 function renderMe() {
   const m = S.me;
   $('meBtn').replaceChildren(avatarEl(m, 36));
-  $('meChip').replaceChildren(avatarEl(m, 38), h('div', { class: 'mi' }, h('b', { text: m.name }), h('small', { text: '@' + m.username })), h('span', { class: 'chip-stone' }, gemEl(), String(m.stones || 0)));
+  $('meChip').replaceChildren(avatarEl(m, 38), h('div', { class: 'mi' }, h('b', null, nameBadge(m.name, m.verified)), h('small', { text: '@' + m.username })), h('span', { class: 'chip-stone' }, gemEl(), String(m.stones || 0)));
   setAvatar($('accAvatar'), m);
-  $('accName').textContent = m.name; $('accNameInput').value = m.name; $('accHandle').textContent = '@' + m.username;
-  if (document.activeElement !== $('accUnameInput')) $('accUnameInput').value = m.username;
+  $('accName').replaceChildren(nameBadge(m.name, m.verified));
+  $('accHandle').textContent = '@' + m.username;
+  $('accBio').textContent = m.bio || 'Add a short bio so people know who you are.';
+  $('accBio').classList.toggle('empty', !m.bio);
+  const chip = (icon, text) => h('span', { class: 'pchip' }, ico(icon), text);
+  const since = m.created_at ? new Date(m.created_at).toLocaleDateString([], { month: 'short', year: 'numeric' }) : '';
+  $('accChips').replaceChildren(...[
+    m.gender ? chip('user', cap(m.gender)) : null, m.location ? chip('pin', m.location) : null, m.hobby ? chip('heart', m.hobby) : null,
+    m.occupation ? chip('briefcase', m.occupation) : null, m.languages ? chip('chat', m.languages) : null, since ? chip('clock', 'Joined ' + since) : null].filter(Boolean));
   $('walletBal').textContent = m.stones || 0;
-  $('walletHint').textContent = 'Groups created: ' + m.owned + ' / ' + m.slots;
+  $('walletHint').textContent = 'Groups created: ' + m.owned + ' of ' + m.slots;
+  const o = m.order; $('walletOrder').hidden = !o;
+  if (o) $('walletOrder').replaceChildren(ico('clock'), h('span', { text: 'Order pending: ' + o.pack + ' Stone. Waiting for the admin.' }));
   $('activeSwitch').checked = m.show_active !== false;
-  $('accPill').lastChild.textContent = m.show_active === false ? 'Hidden' : 'Online';
-  $('accPill').classList.toggle('off', m.show_active === false);
-  $('adminCard').hidden = !m.is_admin;
-  $('kvSince').textContent = m.created_at ? new Date(m.created_at).toLocaleDateString([], { year: 'numeric', month: 'long', day: 'numeric' }) : '-';
+  $('adminOpenBtn').hidden = !m.is_admin;
+  $('verifyText').textContent = m.verified ? 'Your account is verified.' : m.verify_requested ? 'Request sent. Waiting for admin approval.' : 'Get the blue badge next to your name.';
+  $('verifyBtn').hidden = !!m.verified; $('verifyBtn').disabled = !!m.verify_requested; $('verifyBtn').textContent = m.verify_requested ? 'Pending' : 'Request';
 }
 const curGroup = () => S.groups.get(S.gid);
 function syncView() {
@@ -274,6 +294,11 @@ function renderHeader() {
   $('status').dataset.s = S.conn || 'wait';
   $('statusText').textContent = text;
 }
+const BADGE_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#1d9bf0" d="M12 1.8l2.4 1.7 2.9-.2 1.1 2.7 2.6 1.4-.4 2.9L22 12l-1.4 1.9.4 2.9-2.6 1.4-1.1 2.7-2.9-.2L12 22.2l-2.4-1.7-2.9.2-1.1-2.7-2.6-1.4.4-2.9L2 12l1.4-1.9-.4-2.9 2.6-1.4 1.1-2.7 2.9.2z"/><path d="m8.2 12.3 2.6 2.6 5-5.4" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const badgeEl = () => h('span', { class: 'vbadge', title: 'Verified', html: BADGE_SVG });
+const nameBadge = (name, verified) => h('span', { class: 'nb' }, name, verified ? badgeEl() : null);
+const cap = t => t ? t[0].toUpperCase() + t.slice(1) : '';
+function askSignOut() { confirmDialog({ title: 'Sign out?', text: 'You will need to sign in with Google again on this device. Your groups and messages stay safe.', label: 'Sign out', onConfirm: signOut }); }
 function confirmDialog({ title, text, label = 'Confirm', danger = false, onConfirm }) {
   return openModal(close => {
     const go = h('button', { class: 'btn ' + (danger ? 'danger' : 'primary'), type: 'button' }, h('span', { class: 'spin' }), h('span', { class: 'label', text: label }));
@@ -283,24 +308,99 @@ function confirmDialog({ title, text, label = 'Confirm', danger = false, onConfi
   });
 }
 const gemEl = () => h('span', { class: 'gem', 'aria-hidden': 'true' });
-function openBuyStone(note) {
-  const L = BOOT.limits || {}, packs = [10, 25, 50, 100];
+function openEditProfile() {
   openModal(close => {
-    let pick = 25;
-    const chips = packs.map(n => h('button', { type: 'button', class: 'pack' + (n === pick ? ' on' : ''), onclick: () => { pick = n; chips.forEach((c, i) => c.classList.toggle('on', packs[i] === n)); } }, gemEl(), h('b', { text: String(n) }), h('small', { text: 'Stone' })));
-    const go = h('button', { class: 'btn primary lg block', type: 'button' }, ico('send'), h('span', { text: 'Buy on Telegram' }));
+    const m = S.me; let avatarData;
+    const file = h('input', { type: 'file', accept: 'image/*', hidden: true });
+    const nameIn = h('input', { class: 'input', value: m.name, maxlength: '40', autocomplete: 'name' });
+    const unameIn = h('input', { value: m.username, maxlength: '20', autocapitalize: 'none', spellcheck: 'false', autocomplete: 'off', placeholder: 'username' });
+    const uHint = h('small', { class: 'fh' });
+    const av = h('div', { class: 'ep-av' });
+    const paintAv = () => av.replaceChildren(avatarEl({ id: m.id, name: nameIn.value || m.name, avatar: avatarData === '' ? '' : (avatarData || m.avatar) }, 72));
+    nameIn.addEventListener('input', paintAv);
+    file.onchange = async () => { const f = file.files[0]; file.value = ''; if (!f) return; if (!/^image\//.test(f.type)) return toast('Please choose an image file.', 'error'); try { avatarData = (await cropAvatar(f)).data; paintAv(); } catch (e) { toast(e.message, 'error'); } };
+    const okU = v => /^[a-z0-9_-]{5,20}$/.test(v);
+    const checkU = () => { const v = unameIn.value; uHint.textContent = !v ? '5-20 characters: a-z, 0-9, _ and -' : okU(v) ? (v === m.username ? 'This is your current username.' : 'Looks good. We check availability when you save.') : v.length < 5 ? 'Too short: at least 5 characters.' : ''; uHint.classList.toggle('bad', !!v && !okU(v)); };
+    unameIn.addEventListener('input', () => { unameIn.value = unameIn.value.toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 20); checkU(); });
+    let gender = m.gender || '';
+    const gBtns = [['male', 'Male'], ['female', 'Female'], ['other', 'Other'], ['', 'Hide']].map(([v, l]) => h('button', { type: 'button', class: gender === v ? 'on' : '', onclick: () => { gender = v; gBtns.forEach((b, i) => b.classList.toggle('on', ['male', 'female', 'other', ''][i] === v)); } }, l));
+    const inp = (v, max, ph) => h('input', { class: 'input', value: v || '', maxlength: String(max), placeholder: ph });
+    const loc = inp(m.location, 40, 'City, Country'), lang = inp(m.languages, 60, 'Bangla, English'), hobby = inp(m.hobby, 80, 'Gaming, music, travel'), occ = inp(m.occupation, 50, 'Student, designer...');
+    const bio = h('textarea', { class: 'input', maxlength: '160', rows: '3', placeholder: 'Tell people a little about you' }); bio.value = m.bio || '';
+    const cnt = h('small', { class: 'fh right' }); const paintCnt = () => { cnt.textContent = bio.value.length + ' / 160'; }; bio.addEventListener('input', paintCnt);
+    const fld = (label, el, extra) => h('label', { class: 'field' }, h('span', { text: label }), el, extra || null);
+    const err = h('div', { class: 'err' });
+    const save = h('button', { class: 'btn primary', type: 'button' }, h('span', { class: 'spin' }), h('span', { class: 'label', text: 'Save changes' }));
+    save.onclick = async () => {
+      const name = nameIn.value.trim().replace(/\s+/g, ' ');
+      if (!name) { err.textContent = 'Display name cannot be empty.'; return; }
+      if (!okU(unameIn.value)) { err.textContent = 'Username must be 5-20 characters: small letters, numbers, _ or -'; return; }
+      const next = { name, username: unameIn.value, gender, location: loc.value.trim(), languages: lang.value.trim(), hobby: hobby.value.trim(), occupation: occ.value.trim(), bio: bio.value.trim() };
+      const payload = { token: S.token }; let changed = false;
+      for (const k in next) if ((m[k] || '') !== next[k]) { payload[k] = next[k]; changed = true; }
+      if (avatarData !== undefined) { payload.avatar = avatarData; changed = true; }
+      if (!changed) { close(); return; }
+      busy(save, true); err.textContent = '';
+      try { const r = await api('profile', payload); Object.assign(S.me, r.me); renderMe(); close(); toast('Profile updated.', 'ok'); }
+      catch (e) { busy(save, false); err.textContent = e.message; }
+    };
+    paintAv(); checkU(); paintCnt();
+    return h('div', { class: 'modal sheet edit-profile' }, h('h3', { text: 'Edit profile' }),
+      h('div', { class: 'sheet-body' },
+        h('div', { class: 'ep-photo' }, av, h('div', null, h('div', { class: 'row left' }, h('button', { class: 'btn sm', type: 'button', onclick: () => file.click() }, ico('camera'), 'Change photo'), h('button', { class: 'btn sm', type: 'button', onclick: () => { avatarData = ''; paintAv(); } }, 'Remove')), h('small', { class: 'fh', text: 'Square photo, cropped automatically.' }), file)),
+        fld('Display name', nameIn),
+        fld('Username', h('div', { class: 'at-input' }, h('i', { text: '@' }), unameIn), uHint),
+        h('div', { class: 'field' }, h('span', { text: 'Gender' }), h('div', { class: 'seg four' }, ...gBtns)),
+        h('div', { class: 'two' }, fld('Location', loc), fld('Languages', lang)),
+        fld('Hobbies & interests', hobby), fld('Occupation', occ), fld('Bio', bio, cnt), err),
+      h('div', { class: 'sheet-foot' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'), save));
+  });
+}
+async function openProfile(uid) {
+  if (!uid || uid === 'system') return;
+  let p;
+  try { p = uid === S.me.id ? { ...S.me, online: true } : (await api('user', { token: S.token, uid })).profile; }
+  catch (e) { return toast(e.message, 'error'); }
+  openModal(close => {
+    const row = (icon, label, val) => val ? h('li', null, h('span', { class: 'pi' }, ico(icon)), h('div', null, h('small', { text: label }), h('b', { text: val }))) : null;
+    const since = p.created_at ? new Date(p.created_at).toLocaleDateString([], { year: 'numeric', month: 'long', day: 'numeric' }) : '';
+    const rows = [row('user', 'Gender', cap(p.gender)), row('pin', 'Location', p.location), row('heart', 'Hobbies & interests', p.hobby), row('chat', 'Languages', p.languages), row('briefcase', 'Occupation', p.occupation), row('clock', 'Member since', since)].filter(Boolean);
+    return h('div', { class: 'modal sheet pv' },
+      h('div', { class: 'pv-cover' }),
+      h('div', { class: 'pv-head' }, h('div', { class: 'pv-av' }, avatarEl(p, 88)),
+        h('h3', null, nameBadge(p.name, p.verified)), h('p', { class: 'pv-user', text: '@' + p.username }),
+        h('span', { class: 'pill ' + (p.online ? 'ok' : 'off') }, h('span', { class: 'dot' }), p.online ? 'Online' : 'Offline')),
+      h('div', { class: 'sheet-body' },
+        p.bio ? h('p', { class: 'pv-bio', text: p.bio }) : h('p', { class: 'pv-bio empty', text: 'No bio yet.' }),
+        rows.length ? h('ul', { class: 'pv-list' }, ...rows) : null),
+      h('div', { class: 'sheet-foot' }, uid === S.me.id ? h('button', { class: 'btn', type: 'button', onclick: () => { close(); openEditProfile(); } }, 'Edit profile') : null, h('button', { class: 'btn primary', type: 'button', onclick: close }, 'Close')));
+  });
+}
+function openBuyStone(note) {
+  const L = BOOT.limits || {}, packs = BOOT.packs || [10, 25, 50, 100, 250], labels = { 10: 'Starter', 25: 'Popular', 50: 'Plus', 100: 'Pro', 250: 'Mega' };
+  openModal(close => {
+    let pick = packs.includes(25) ? 25 : packs[0];
+    const summary = n => 'Good for ' + Math.floor(n / L.slot_cost) + ' group slot' + (Math.floor(n / L.slot_cost) === 1 ? '' : 's') + ' or ' + Math.floor(n / L.members_cost) + ' member upgrade' + (Math.floor(n / L.members_cost) === 1 ? '' : 's') + '.';
+    const sum = h('p', { class: 'pack-sum', text: summary(pick) });
+    const cards = packs.map(n => h('button', { type: 'button', class: 'pack' + (n === pick ? ' on' : ''), onclick: () => { pick = n; cards.forEach((c, i) => c.classList.toggle('on', packs[i] === n)); sum.textContent = summary(n); } },
+      n === 25 ? h('i', { class: 'pop', text: 'Popular' }) : null, gemEl(), h('b', { text: String(n) }), h('small', { text: labels[n] || 'Pack' })));
+    const go = h('button', { class: 'btn primary lg block', type: 'button' }, ico('send'), h('span', { text: 'Order on Telegram' }));
     go.onclick = () => {
       const msg = 'Hi! I want to buy ' + pick + ' Stone for ' + (BOOT.title || 'Anonymous Group Chat') + '.\nUsername: @' + S.me.username + '\nUser ID: ' + S.me.id;
       window.open('https://t.me/' + (BOOT.telegram || 'developer_bhai') + '?text=' + encodeURIComponent(msg), '_blank', 'noopener');
+      api('stone-order', { token: S.token, pack: pick }).then(r => { Object.assign(S.me, r.me); renderMe(); }).catch(() => {});
+      close(); toast('Order sent to the admin. Finish the payment on Telegram.', 'ok', 5200);
     };
-    return h('div', { class: 'modal' }, h('h3', { text: 'Buy Stone' }),
-      note ? h('p', { class: 'warnline', text: note }) : null,
-      h('p', { text: 'Choose a pack, then talk to the admin on Telegram (@' + (BOOT.telegram || 'developer_bhai') + '). Your Stone is added to your account after payment.' }),
-      h('div', { class: 'packs' }, ...chips),
-      h('div', { class: 'costs' },
-        h('div', null, ico('plus'), h('span', { text: 'New group slot: ' + L.slot_cost + ' Stone' })),
-        h('div', null, ico('users'), h('span', { text: '+' + L.members_step + ' members for a group: ' + L.members_cost + ' Stone' }))),
-      go, h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Close')));
+    return h('div', { class: 'modal sheet store' },
+      h('div', { class: 'st-head' }, h('span', { class: 'wc-ico' }, gemEl()), h('div', null, h('h3', { text: 'Stone Store' }), h('p', { text: 'Choose a pack and order on Telegram.' })), h('span', { class: 'chip-stone big' }, gemEl(), String(S.me.stones || 0))),
+      h('div', { class: 'sheet-body' },
+        note ? h('p', { class: 'warnline', text: note }) : null,
+        h('div', { class: 'packs' }, ...cards), sum,
+        h('ol', { class: 'steps' }, h('li', null, h('b', { text: '1' }), 'Pick a pack'), h('li', null, h('b', { text: '2' }), 'Order on Telegram (@' + (BOOT.telegram || 'developer_bhai') + ')'), h('li', null, h('b', { text: '3' }), 'Admin adds Stone to your wallet')),
+        h('div', { class: 'costs' },
+          h('div', null, ico('plus'), h('span', { text: 'New group slot' }), h('i', { text: L.slot_cost + ' Stone' })),
+          h('div', null, ico('users'), h('span', { text: '+' + L.members_step + ' members for a group' }), h('i', { text: L.members_cost + ' Stone' })))),
+      h('div', { class: 'sheet-foot' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Close'), go));
   });
 }
 function openUnlockSlot() {
@@ -415,14 +515,14 @@ function connect() {
   sock.on('webrtc_signal', handleSignal);
 }
 function onProfileUpdated(d) {
-  if (d.id === S.me.id) { Object.assign(S.me, { name: d.name, username: d.username, avatar: d.avatar }); renderMe(); }
+  if (d.id === S.me.id) { Object.assign(S.me, { name: d.name, username: d.username, avatar: d.avatar, verified: !!d.verified }); renderMe(); }
   for (const G of S.groups.values()) {
-    const m = G.members.find(x => x.id === d.id); if (m) { m.name = d.name; m.username = d.username; m.avatar = d.avatar; }
-    if (G.msgs) G.msgs.forEach(x => { if (x.uid === d.id) { x.name = d.name; x.username = d.username; x.avatar = d.avatar; } });
+    const m = G.members.find(x => x.id === d.id); if (m) { m.name = d.name; m.username = d.username; m.avatar = d.avatar; m.verified = !!d.verified; }
+    if (G.msgs) G.msgs.forEach(x => { if (x.uid === d.id) { x.name = d.name; x.username = d.username; x.avatar = d.avatar; x.verified = !!d.verified; } });
   }
   const u = { id: d.id, name: d.name, avatar: d.avatar };
   document.querySelectorAll('.avatar[data-uid="' + d.id + '"]').forEach(el => setAvatar(el, u));
-  document.querySelectorAll('.msg[data-uid="' + d.id + '"] .name .nm').forEach(n => { n.textContent = d.name; });
+  document.querySelectorAll('.msg[data-uid="' + d.id + '"] .name').forEach(n => { const nm = n.querySelector('.nm'); if (nm) nm.textContent = d.name; n.querySelectorAll('.vbadge').forEach(b => b.remove()); if (d.verified) (n.querySelector('.nm') || n).after(badgeEl()); });
   document.querySelectorAll('.msg[data-uid="' + d.id + '"] .name .un').forEach(n => { n.textContent = '@' + d.username; });
   for (const sid in C.peers) if (C.peers[sid].uid === d.id) { C.peers[sid].name = d.name; labelTile(sid); }
   renderHeader();
@@ -525,36 +625,41 @@ async function handlePendingJoin() {
     toast(r.already ? 'You are already in this group.' : 'You joined ' + r.group.name + '.', 'ok');
   } catch (e) { toast(e.message, 'error'); }
 }
-function openGroupModal(tab = 'create') {
+function openGroupModal(tab = 'find') {
   openModal(close => {
     let mode = tab, timer = 0, seq = 0;
-    const nameIn = h('input', { class: 'input', placeholder: 'Group name', maxlength: '40', autocomplete: 'off', 'aria-label': 'Group name' });
-    const codeIn = h('input', { class: 'input code-in', placeholder: 'XXXX-XXXX', maxlength: '9', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', 'aria-label': 'Invite code' });
-    const findIn = h('input', { class: 'input', placeholder: 'Search groups by name', maxlength: '40', autocomplete: 'off', 'aria-label': 'Search groups' });
-    const results = h('ul', { class: 'find-list' });
-    const err = h('div', { class: 'err' }), info = h('p', {});
-    const go = h('button', { class: 'btn primary', type: 'submit' }, h('span', { class: 'spin' }), h('span', { class: 'label' }));
-    const tabs = { create: h('button', { type: 'button' }, 'Create'), join: h('button', { type: 'button' }, 'Join code'), find: h('button', { type: 'button' }, 'Find') };
-    const fields = { create: h('div', { class: 'field' }, nameIn), join: h('div', { class: 'field' }, codeIn), find: h('div', { class: 'field' }, findIn) };
     const L = BOOT.limits || {};
+    const findIn = h('input', { placeholder: 'Search groups by name', maxlength: '40', autocomplete: 'off', 'aria-label': 'Search groups' });
+    const results = h('ul', { class: 'find-list' });
+    const codeIn = h('input', { class: 'code-in', placeholder: 'XXXX-XXXX', maxlength: '9', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', 'aria-label': 'Invite code' });
+    const nameIn = h('input', { class: 'input', placeholder: 'e.g. Weekend Gamers', maxlength: '40', autocomplete: 'off', 'aria-label': 'Group name' });
+    const apCb = h('input', { type: 'checkbox' });
+    const err = h('div', { class: 'err' });
+    const go = h('button', { class: 'btn primary', type: 'submit' }, h('span', { class: 'spin' }), h('span', { class: 'label' }));
+    const defs = { find: ['search', 'Find'], join: ['key', 'Join'], create: ['plus', 'Create'] };
+    const tabs = {}; for (const k in defs) tabs[k] = h('button', { type: 'button', role: 'tab' }, ico(defs[k][0]), h('span', { text: defs[k][1] }));
+    const panes = {
+      find: h('div', { class: 'pane' }, h('div', { class: 'search-box lg' }, ico('search'), findIn), results),
+      join: h('div', { class: 'pane center' }, h('div', { class: 'hero-ico' }, ico('key')), h('p', { class: 'pane-t', text: 'Have an invite code?' }), h('p', { class: 'pane-s', text: 'Enter the 8-character code a friend shared with you.' }), codeIn),
+      create: h('div', { class: 'pane' }, h('label', { class: 'field' }, h('span', { text: 'Group name' }), nameIn),
+        h('label', { class: 'switch-row compact' }, h('span', null, h('b', { text: 'Approve new members' }), h('small', { text: 'You review every join request.' })), h('span', { class: 'switch' }, apCb, h('i'))),
+        h('div', { class: 'facts' }, h('span', null, ico('users'), L.base_members + ' members'), h('span', null, ico('plus'), (S.me.slots - S.me.owned) + ' free slot' + (S.me.slots - S.me.owned === 1 ? '' : 's') + ' left'), h('span', null, ico('shield'), 'Private by default'))) };
     const paint = () => {
-      for (const k in tabs) { tabs[k].classList.toggle('on', mode === k); fields[k].hidden = mode !== k; }
-      results.hidden = mode !== 'find'; go.hidden = mode === 'find';
+      for (const k in tabs) { tabs[k].classList.toggle('on', mode === k); tabs[k].setAttribute('aria-selected', mode === k); panes[k].hidden = mode !== k; }
+      go.hidden = mode === 'find';
       go.querySelector('.label').textContent = mode === 'create' ? 'Create group' : 'Join group';
-      info.textContent = mode === 'create' ? 'Create a private group and share its invite code. Up to ' + L.base_members + ' members. You can create ' + (S.me.slots || L.free_groups) + ' groups (' + (S.me.owned || 0) + ' used).'
-        : mode === 'join' ? 'Enter the invite code someone shared with you.' : 'Search public groups by name, then join or send a request.';
       err.textContent = '';
-      setTimeout(() => ({ create: nameIn, join: codeIn, find: findIn })[mode].focus(), 30);
+      setTimeout(() => ({ find: findIn, join: codeIn, create: nameIn })[mode].focus(), 40);
     };
     for (const k in tabs) tabs[k].onclick = () => { mode = k; paint(); };
     codeIn.addEventListener('input', () => { const v = codeIn.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8); codeIn.value = v.length > 4 ? v.slice(0, 4) + '-' + v.slice(4) : v; });
-    const joined = async (r, then) => {
+    const joined = async r => {
       if (r.status === 'pending') { toast('Request sent to "' + (r.name || 'the group') + '". You can chat once the owner approves.', 'ok', 5200); return false; }
       close(); addGroup(r.group); await selectGroup(r.group.id);
       toast(r.status === 'member' ? 'You are already in this group.' : 'You joined ' + r.group.name + '.', 'ok'); return true;
     };
     const renderResults = (rows, q) => {
-      if (!rows.length) { results.replaceChildren(h('li', { class: 'find-empty' }, q.length < 2 ? 'Type at least 2 letters.' : 'No public group found for "' + q + '".')); return; }
+      if (!rows.length) { results.replaceChildren(h('li', { class: 'find-empty' }, h('div', { class: 'hero-ico sm' }, ico('search')), h('b', { text: q.length < 2 ? 'Discover public groups' : 'No groups found' }), h('small', { text: q.length < 2 ? 'Type at least 2 letters of a group name.' : 'Nothing matches "' + q + '". Try another name or use an invite code.' }))); return; }
       results.replaceChildren(...rows.map(g => {
         const label = { open: 'Join', approval: 'Request', pending: 'Requested', member: 'Open', full: 'Full' }[g.status];
         const btn = h('button', { type: 'button', class: 'btn sm' + (g.status === 'open' || g.status === 'approval' ? ' primary' : ''), disabled: g.status === 'pending' || g.status === 'full' }, label);
@@ -563,22 +668,22 @@ function openGroupModal(tab = 'create') {
           busy(btn, true);
           try {
             const r = await ask('request_join', { gid: g.id });
-            if (r.status === 'pending') { g.status = 'pending'; btn.textContent = 'Requested'; btn.classList.remove('primary'); btn.disabled = true; busy(btn, false); btn.disabled = true; toast('Request sent. You can chat once the owner approves.', 'ok', 5200); }
+            if (r.status === 'pending') { g.status = 'pending'; busy(btn, false); btn.textContent = 'Requested'; btn.classList.remove('primary'); btn.disabled = true; toast('Request sent. You can chat once the owner approves.', 'ok', 5200); }
             else await joined(r);
           } catch (e) { busy(btn, false); toast(e.message, 'error'); }
         };
-        return h('li', null, avatarEl({ id: g.id, name: g.name, avatar: g.avatar }, 42),
-          h('div', { class: 'mi' }, h('b', { text: g.name }), h('small', { text: g.members + '/' + g.limit + ' members' + (g.status === 'approval' ? ' · approval needed' : '') })), btn);
+        const fill = Math.min(100, Math.round(g.members / g.limit * 100));
+        return h('li', null, avatarEl({ id: g.id, name: g.name, avatar: g.avatar }, 46),
+          h('div', { class: 'mi' }, h('b', { text: g.name }), h('div', { class: 'meter' }, h('i', { style: 'width:' + fill + '%' })), h('small', { text: g.members + ' / ' + g.limit + ' members' + (g.status === 'approval' ? ' · approval needed' : '') })), btn);
       }));
     };
     findIn.addEventListener('input', () => {
       clearTimeout(timer); const q = findIn.value.trim(), my = ++seq;
       if (q.length < 2) return renderResults([], q);
-      timer = setTimeout(async () => { try { const r = await ask('search_groups', { q }); if (my === seq) renderResults(r.results, q); } catch (e) { if (my === seq) results.replaceChildren(h('li', { class: 'find-empty' }, e.message)); } }, 260);
+      timer = setTimeout(async () => { try { const r = await ask('search_groups', { q }); if (my === seq) renderResults(r.results, q); } catch (e) { if (my === seq) results.replaceChildren(h('li', { class: 'find-empty' }, h('small', { text: e.message }))); } }, 260);
     });
     renderResults([], '');
-    const form = h('form', { novalidate: true }, h('div', { class: 'seg three' }, tabs.create, tabs.join, tabs.find), info, fields.create, fields.join, fields.find, results, err,
-      h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Close'), go));
+    const form = h('form', { novalidate: true, class: 'gm-form' }, ...Object.values(panes), err);
     form.addEventListener('submit', async e => {
       e.preventDefault(); err.textContent = '';
       if (mode === 'find') return;
@@ -587,24 +692,31 @@ function openGroupModal(tab = 'create') {
           const name = nameIn.value.trim(); if (!name) throw new Error('Enter a group name.');
           if (S.me.owned >= S.me.slots) { close(); return openUnlockSlot(); }
           busy(go, true);
-          const r = await ask('create_group', { name });
+          const r = await ask('create_group', { name, approval: apCb.checked });
           if (r.me) { Object.assign(S.me, r.me); renderMe(); }
           close(); addGroup(r.group); await selectGroup(r.group.id); toast('Group created.', 'ok'); openGroupInfo();
         } else {
           if (codeIn.value.replace(/-/g, '').length < 8) throw new Error('Enter the 8-character invite code.');
-          busy(go, true);
-          await joined(await ask('join_group', { code: codeIn.value }));
-          busy(go, false);
+          busy(go, true); await joined(await ask('join_group', { code: codeIn.value })); busy(go, false);
         }
       } catch (e2) { busy(go, false); if (e2.code === 'slots') { close(); return openUnlockSlot(); } err.textContent = e2.message; }
     });
+    go.type = 'button'; go.onclick = () => form.requestSubmit();
     paint();
-    return h('div', { class: 'modal' }, h('h3', { text: 'Groups' }), form);
+    return h('div', { class: 'modal sheet gm' }, h('div', { class: 'gm-head' }, h('h3', { text: 'Groups' }), h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Close', onclick: close }, ico('close'))),
+      h('div', { class: 'tabbar', role: 'tablist' }, tabs.find, tabs.join, tabs.create),
+      h('div', { class: 'sheet-body' }, form),
+      h('div', { class: 'sheet-foot', hidden: false }, go));
   });
 }
 function memberRow(m, G, on) {
   return h('li', null, h('span', { class: 'wrap' + (on.has(m.id) ? ' on' : '') }, avatarEl(m, 42)),
     h('div', { class: 'mi' }, h('b', { text: m.name + (m.id === S.me.id ? ' (You)' : '') }), h('small', { text: m.username ? '@' + m.username : '' })),
+    m.id === G.owner ? h('span', { class: 'role', text: 'Owner' }) : (on.has(m.id) ? h('span', { class: 'role on', text: 'Online' }) : null));
+}
+function memberRow(m, G, on, close) {
+  return h('li', { class: 'clickable', onclick: () => { close(); openProfile(m.id); } }, h('span', { class: 'wrap' + (on.has(m.id) ? ' on' : '') }, avatarEl(m, 42)),
+    h('div', { class: 'mi' }, h('b', null, nameBadge(m.name + (m.id === S.me.id ? ' (You)' : ''), m.verified)), h('small', { text: m.username ? '@' + m.username : '' })),
     m.id === G.owner ? h('span', { class: 'role', text: 'Owner' }) : (on.has(m.id) ? h('span', { class: 'role on', text: 'Online' }) : null));
 }
 function openGroupInfo() {
@@ -613,18 +725,17 @@ function openGroupInfo() {
     const G = G0, L = BOOT.limits || {}, isOwner = G.owner === S.me.id, on = new Set(G.online || []);
     const members = [...G.members].sort((a, b) => (b.id === G.owner) - (a.id === G.owner) || (on.has(b.id) - on.has(a.id)) || a.name.localeCompare(b.name));
     const code = G.code.slice(0, 4) + '-' + G.code.slice(4);
+    const ib = (icon, label, fn) => h('button', { class: 'icon-btn sm', type: 'button', title: label, 'aria-label': label, onclick: fn }, ico(icon));
     const top = h('div', { class: 'gi-top' },
-      h('div', { class: 'gi-hero' }, avatarEl({ id: G.id, name: G.name, avatar: G.avatar }, 68),
-        h('div', { class: 'gi-title' }, h('h3', { text: G.name }), h('p', { text: G.members.length + ' / ' + G.member_limit + ' members' + (G.approval ? ' · approval on' : '') })),
-        isOwner ? h('button', { class: 'icon-btn', type: 'button', title: 'Group settings', 'aria-label': 'Group settings', onclick: () => { close(); openGroupSettings(); } }, ico('settings')) : null),
-      h('div', { class: 'invite' }, h('small', { text: 'Invite code' }), h('div', { class: 'code', text: code }),
-        h('div', { class: 'row' },
-          h('button', { class: 'btn', type: 'button', onclick: () => copyText(code, 'Invite code copied.') }, 'Copy code'),
-          h('button', { class: 'btn primary', type: 'button', onclick: () => copyText(location.origin + '/?join=' + G.code, 'Invite link copied.') }, 'Copy link'))),
+      h('div', { class: 'gi-hero' }, avatarEl({ id: G.id, name: G.name, avatar: G.avatar }, 60),
+        h('div', { class: 'gi-title' }, h('h3', { text: G.name }), h('p', null, G.members.length + ' / ' + G.member_limit + ' members', G.approval ? h('span', { class: 'tag', text: 'Approval' }) : null, G.public === false ? h('span', { class: 'tag', text: 'Hidden' }) : null)),
+        isOwner ? ib('settings', 'Group settings', () => { close(); openGroupSettings(); }) : null),
+      h('div', { class: 'code-row' }, ico('key'), h('span', { class: 'cr-l', text: 'Invite' }), h('b', { class: 'cr-code', text: code }),
+        ib('copy', 'Copy code', () => copyText(code, 'Invite code copied.')), ib('link', 'Copy invite link', () => copyText(location.origin + '/?join=' + G.code, 'Invite link copied.'))),
       isOwner && G.pending_count ? h('button', { class: 'req-banner', type: 'button', onclick: () => { close(); openRequests(); } }, ico('users'), h('span', { text: G.pending_count + ' join request' + (G.pending_count === 1 ? '' : 's') }), h('i', { text: 'Review' })) : null,
-      isOwner && G.member_limit < L.max_members ? h('button', { class: 'extend', type: 'button', onclick: () => extendMembers(G, close) }, gemEl(), h('span', { text: 'Add +' + L.members_step + ' member slots' }), h('i', { text: L.members_cost + ' Stone' })) : null,
-      h('div', { class: 'gi-sub' }, h('b', { text: 'Members' }), h('span', { text: String(G.members.length) })));
-    const list = h('ul', { class: 'gi-members' }, ...members.map(m => memberRow(m, G, on)));
+      h('div', { class: 'gi-sub' }, h('b', { text: 'Members' }), h('span', { class: 'cnt', text: String(G.members.length) }),
+        isOwner && G.member_limit < L.max_members ? h('button', { class: 'extend-pill', type: 'button', title: 'Add ' + L.members_step + ' member slots', onclick: () => extendMembers(G, close) }, gemEl(), h('span', { text: '+' + L.members_step }), h('i', { text: L.members_cost })) : null));
+    const list = h('ul', { class: 'gi-members' }, ...members.map(m => memberRow(m, G, on, close)));
     const danger = isOwner
       ? h('button', { class: 'btn danger', type: 'button', onclick: () => { close(); confirmDialog({ title: 'Delete "' + G.name + '"?', text: 'This permanently deletes the group and all of its messages for every member. This cannot be undone.', label: 'Delete group', danger: true, onConfirm: () => deleteGroup(G.id) }); } }, ico('trash'), h('span', { text: 'Delete group' }))
       : h('button', { class: 'btn danger', type: 'button', onclick: () => { close(); confirmDialog({ title: 'Leave "' + G.name + '"?', text: 'You will no longer receive messages from this group. You can join again with the invite code.', label: 'Leave group', danger: true, onConfirm: () => leaveGroup(G.id) }); } }, ico('logout'), h('span', { text: 'Leave group' }));
@@ -650,7 +761,7 @@ async function openRequests() {
           try { await ask('resolve_request', { gid: G.id, uid: u.id, approve }); rows = rows.filter(x => x.id !== u.id); draw(); toast(approve ? u.name + ' joined the group.' : 'Request declined.', approve ? 'ok' : 'info'); }
           catch (e) { toast(e.message, 'error'); if (e.code === 'full') { close(); } }
         };
-        return h('li', null, avatarEl(u, 42), h('div', { class: 'mi' }, h('b', { text: u.name }), h('small', { text: '@' + u.username })),
+        return h('li', null, h('span', { class: 'clickable', onclick: () => openProfile(u.id) }, avatarEl(u, 42)), h('div', { class: 'mi clickable', onclick: () => openProfile(u.id) }, h('b', null, nameBadge(u.name, u.verified)), h('small', { text: '@' + u.username })),
           h('button', { class: 'btn sm', type: 'button', onclick: () => done(false) }, 'Decline'), h('button', { class: 'btn sm primary', type: 'button', onclick: () => done(true) }, 'Approve'));
       }) : [h('li', { class: 'find-empty' }, 'No pending requests.')]));
     };
@@ -703,43 +814,62 @@ async function openHistory() {
 }
 
 /* ------------------------------------------------------------------ admin panel */
-function renderAdmin(users, total) {
-  $('adminCount').textContent = total + ' user' + (total === 1 ? '' : 's') + ' in total' + (users.length < total ? ' · showing ' + users.length : '');
+const AD = { filter: 'all', timer: 0 };
+const adUser = (u, extra) => h('div', { class: 'au-top' }, avatarEl(u, 44), h('div', { class: 'mi' }, h('b', null, nameBadge(u.name, u.verified)), h('small', { text: '@' + u.username + (u.email ? ' · ' + u.email : '') })), extra || null);
+async function adminAct(path, payload, okMsg) {
+  try { const r = await api('admin/' + path, { token: S.token, ...payload }); if (okMsg) toast(okMsg(r), 'ok'); return r; }
+  catch (e) { toast(e.message, 'error'); return null; }
+}
+function renderAdminStats(st) {
+  const items = [['users', 'Users', st.users], ['shield', 'Verified', st.verified], ['eye', 'Online now', st.online], ['chat', 'Groups', st.groups], ['gem', 'Stone in wallets', st.stones]];
+  $('adminStats').replaceChildren(...items.map(([ic, l, v]) => h('div', { class: 'stat' }, h('span', { class: 'si' }, ico(ic)), h('b', { text: String(v) }), h('small', { text: l }))));
+}
+function renderQueues(orders, reqs) {
+  $('adminOrdersBox').hidden = !orders.length; $('ordersCount').textContent = orders.length;
+  $('adminOrders').replaceChildren(...orders.map(u => h('li', null, adUser(u, h('span', { class: 'au-bal' }, gemEl(), String(u.order.pack))),
+    h('div', { class: 'au-ctl' }, h('small', { class: 'muted', text: 'Has ' + u.stones + ' Stone · ordered ' + new Date(u.order.ts).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) }),
+      h('button', { class: 'btn sm', type: 'button', onclick: async () => { if (await adminAct('dismiss', { uid: u.id, what: 'order' })) refreshAdmin(); } }, 'Dismiss'),
+      h('button', { class: 'btn sm primary', type: 'button', onclick: async () => { if (await adminAct('stone', { uid: u.id, op: 'add', amount: u.order.pack, fulfil_order: true }, r => 'Added ' + u.order.pack + ' Stone to ' + u.name)) refreshAdmin(); } }, 'Add ' + u.order.pack + ' Stone')))));
+  $('adminVerifyBox').hidden = !reqs.length; $('verifyCount').textContent = reqs.length;
+  $('adminVerify').replaceChildren(...reqs.map(u => h('li', null, adUser(u),
+    h('div', { class: 'au-ctl' }, h('button', { class: 'btn sm', type: 'button', onclick: async () => { if (await adminAct('dismiss', { uid: u.id, what: 'verify' })) refreshAdmin(); } }, 'Dismiss'),
+      h('button', { class: 'btn sm primary', type: 'button', onclick: async () => { if (await adminAct('verify', { uid: u.id, verified: true }, () => u.name + ' is now verified')) refreshAdmin(); } }, ico('check'), 'Approve')))));
+}
+function renderAdminUsers(users, total) {
+  $('adminCount').textContent = total + ' user' + (total === 1 ? '' : 's') + (users.length < total ? ' · showing ' + users.length : '');
   $('adminList').replaceChildren(...users.map(u => {
     const bal = h('b', { text: String(u.stones) }), amt = h('input', { type: 'number', inputmode: 'numeric', placeholder: 'Amount', 'aria-label': 'Amount' });
+    const li = h('li', { class: 'au' });
     const act = async (op, amount, btn) => {
       const n = Number(amount); if (!Number.isInteger(n)) return toast('Enter a whole number.', 'error');
       if (btn) busy(btn, true);
-      try { const r = await api('admin/stone', { token: S.token, uid: u.id, op, amount: n }); bal.textContent = r.user.stones; amt.value = ''; toast((u.name) + ': ' + r.user.stones + ' Stone', 'ok'); }
-      catch (e) { toast(e.message, 'error'); } finally { if (btn) busy(btn, false); }
+      const r = await adminAct('stone', { uid: u.id, op, amount: n }, r => u.name + ': ' + r.user.stones + ' Stone');
+      if (btn) busy(btn, false);
+      if (r) { bal.textContent = r.user.stones; amt.value = ''; }
     };
     const addB = h('button', { class: 'btn sm primary', type: 'button', onclick: () => act('add', amt.value, addB) }, 'Add'), setB = h('button', { class: 'btn sm', type: 'button', onclick: () => act('set', amt.value, setB) }, 'Set');
-    return h('li', null, h('div', { class: 'au-top' }, avatarEl(u, 44), h('div', { class: 'mi' }, h('b', { text: u.name }), h('small', { text: '@' + u.username + (u.email ? ' · ' + u.email : '') })), h('span', { class: 'au-bal' }, gemEl(), bal)),
-      h('div', { class: 'au-ctl' }, ...[10, 50, 100].map(n => h('button', { class: 'btn sm', type: 'button', onclick: () => act('add', n) }, '+' + n)), amt, addB, setB));
+    const vb = h('button', { class: 'btn sm' + (u.verified ? '' : ' primary'), type: 'button' }, u.verified ? 'Remove badge' : 'Verify');
+    vb.onclick = async () => { busy(vb, true); const r = await adminAct('verify', { uid: u.id, verified: !u.verified }, r => u.name + (r.user.verified ? ' is now verified' : ' badge removed')); busy(vb, false); if (r) refreshAdmin(); };
+    const head = h('button', { class: 'au-head', type: 'button', onclick: () => li.classList.toggle('open') }, adUser(u, h('span', { class: 'au-bal' }, gemEl(), bal)), h('span', { class: 'ico chev', html: I.chev }));
+    li.append(head, h('div', { class: 'au-ctl' }, ...[10, 50, 100].map(n => h('button', { class: 'btn sm', type: 'button', onclick: () => act('add', n) }, '+' + n)), amt, addB, setB, vb));
+    return li;
   }));
-  if (!users.length) $('adminList').replaceChildren(h('li', { class: 'find-empty' }, 'No users found.'));
+  if (!users.length) $('adminList').replaceChildren(h('li', { class: 'find-empty' }, h('small', { text: 'No users found.' })));
 }
-let adminTimer = 0;
-async function loadAdmin() {
-  clearTimeout(adminTimer);
-  adminTimer = setTimeout(async () => {
-    try { const r = await api('admin/users', { token: S.token, q: $('adminSearch').value }); renderAdmin(r.users, r.total); }
+async function loadAdminUsers() {
+  clearTimeout(AD.timer);
+  AD.timer = setTimeout(async () => {
+    try { const r = await api('admin/users', { token: S.token, q: $('adminSearch').value, filter: AD.filter }); renderAdminUsers(r.users, r.total); }
     catch (e) { toast(e.message, 'error'); }
-  }, 220);
+  }, 200);
 }
-function openAdmin() { showView('admin'); $('adminSearch').value = ''; loadAdmin(); }
+async function refreshAdmin() {
+  try { const o = await api('admin/overview', { token: S.token }); renderAdminStats(o.stats); renderQueues(o.orders, o.requests); } catch (e) { toast(e.message, 'error'); }
+  loadAdminUsers();
+}
+function openAdmin() { showView('admin'); $('adminSearch').value = ''; refreshAdmin(); }
 
 /* ------------------------------------------------------------------ profile extras */
-async function saveUsername(e) {
-  e.preventDefault();
-  const v = $('accUnameInput').value.trim().toLowerCase();
-  if (!/^[a-z0-9_-]{3,12}$/.test(v)) return toast('Username must be 3-12 characters: small letters, numbers, _ or -', 'error');
-  if (v === S.me.username) return toast('Nothing to update.', 'info');
-  busy($('unameSave'), true);
-  try { const r = await api('profile', { token: S.token, username: v }); Object.assign(S.me, r.me); renderMe(); toast('Username updated.', 'ok'); }
-  catch (err) { toast(err.message, 'error'); }
-  finally { busy($('unameSave'), false); }
-}
 async function saveActive() {
   const want = $('activeSwitch').checked;
   try { const r = await api('profile', { token: S.token, show_active: want }); Object.assign(S.me, r.me); renderMe(); toast(want ? 'Others can see when you are active.' : 'You now appear offline.', 'ok'); }
@@ -813,7 +943,7 @@ function buildMessage(m) {
   const row = h('div', { class: 'msg' + (mine ? ' mine' : '') + (cont ? ' cont' : ''), dataset: { id: m.id, uid: m.uid } });
   const bubble = h('div', { class: 'bubble' });
   if (!mine && !cont) bubble.append(h('div', { class: 'name', style: '--h:' + hue(String(m.uid || m.name || '')) },
-    h('span', { class: 'nm', text: m.name || 'Member' }), m.username ? h('span', { class: 'un', text: '@' + m.username }) : null));
+    h('span', { class: 'nm', text: m.name || 'Member' }), m.verified ? badgeEl() : null, m.username ? h('span', { class: 'un', text: '@' + m.username }) : null));
   if (m.reply_to) {
     const rid = m.reply_to.id;
     bubble.append(h('div', {
@@ -906,16 +1036,6 @@ async function onAvatarPicked(file) {
       h('div', { class: 'crop-preview' }, result.canvas),
       h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'), save));
   });
-}
-async function saveName(e) {
-  e.preventDefault();
-  const name = $('accNameInput').value.trim().replace(/\s+/g, ' ');
-  if (!name) return toast('Display name cannot be empty.', 'error');
-  if (name === S.me.name) return toast('Nothing to update.', 'info');
-  busy($('nameSave'), true);
-  try { const r = await api('profile', { token: S.token, name }); S.me = r.me; renderMe(); toast('Profile updated.', 'ok'); }
-  catch (err) { toast(err.message, 'error'); }
-  finally { busy($('nameSave'), false); }
 }
 function confirmDelete() {
   openModal(close => {
@@ -1272,7 +1392,8 @@ function init() {
 
   $('menuBtn').onclick = openSide; $('sideClose').onclick = closeSide; $('scrim').onclick = closeSide;
   $('meBtn').onclick = () => showView('account'); $('meChip').onclick = () => showView('account');
-  $('newGroupBtn').onclick = () => openGroupModal('create'); $('wCreate').onclick = () => openGroupModal('create'); $('wJoin').onclick = () => openGroupModal('join');
+  $('newGroupBtn').onclick = () => openGroupModal('find'); $('wCreate').onclick = () => openGroupModal('create'); $('wJoin').onclick = () => openGroupModal('join'); $('wFind').onclick = () => openGroupModal('find');
+  $('feed').addEventListener('click', e => { const t = e.target.closest('.msg .avatar, .msg .name .nm, .msg .name .un'); if (!t) return; const row = t.closest('.msg'); if (row && row.dataset.uid) openProfile(row.dataset.uid); });
   $('grpBtn').onclick = openGroupInfo; $('metaBtn').onclick = () => { if (S.view === 'chat') openGroupInfo(); };
   $('accBack').onclick = () => showView('chat');
   $('callBtn').onclick = () => openCall(false); $('voiceBtn').onclick = () => openCall(true);
@@ -1288,20 +1409,16 @@ function init() {
   $('replyCancel').onclick = clearReply;
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && S.reply) clearReply(); });
 
-  $('uploadBtn').onclick = () => $('avatarFile').click(); $('accPhotoBtn').onclick = () => $('avatarFile').click();
+  $('accPhotoBtn').onclick = () => $('avatarFile').click();
   $('avatarFile').onchange = e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; onAvatarPicked(f); };
-  $('removePhotoBtn').onclick = async () => {
-    if (!S.me.avatar) return toast('You have no profile photo to remove.', 'info');
-    try { const r = await api('profile', { token: S.token, avatar: '' }); S.me = r.me; renderMe(); toast('Profile photo removed.', 'ok'); } catch (e) { toast(e.message, 'error'); }
-  };
-  $('nameForm').addEventListener('submit', saveName);
-  $('signOutBtn').onclick = () => confirmDialog({ title: 'Sign out?', text: 'You will need to sign in with Google again on this device. Your groups and messages stay safe.', label: 'Sign out', onConfirm: signOut });
+  $('editProfileBtn').onclick = openEditProfile;
+  $('verifyBtn').onclick = async () => { try { const r = await api('verify-request', { token: S.token }); Object.assign(S.me, r.me); renderMe(); toast('Verification request sent to the admin.', 'ok'); } catch (e) { toast(e.message, 'error'); } };
+  $('signOutBtn').onclick = askSignOut; $('sideSignOut').onclick = askSignOut;
   $('deleteBtn').onclick = confirmDelete;
-  $('unameForm').addEventListener('submit', saveUsername);
-  $('accUnameInput').addEventListener('input', e => { e.target.value = e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 12); });
   $('activeSwitch').addEventListener('change', saveActive);
   $('buyStoneBtn').onclick = () => openBuyStone(); $('historyBtn').onclick = openHistory;
-  $('adminOpenBtn').onclick = openAdmin; $('adminBack').onclick = () => showView('account'); $('adminSearch').addEventListener('input', loadAdmin);
+  $('adminOpenBtn').onclick = openAdmin; $('adminBack').onclick = () => showView('account'); $('adminSearch').addEventListener('input', loadAdminUsers); $('adminRefresh').onclick = refreshAdmin;
+  $('adminFilters').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; AD.filter = b.dataset.f; $('adminFilters').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); loadAdminUsers(); });
   matchMedia('(max-width:959px)').addEventListener('change', () => { if (S.me) syncView(); });
   document.querySelectorAll('#themeSeg button').forEach(b => { b.onclick = () => applyTheme(b.dataset.theme); });
 
