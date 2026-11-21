@@ -65,6 +65,9 @@ const I = {
   check: svg('<path d="m5 12.5 4.5 4.5L19 7.5"/>'),
   plus: svg('<path d="M12 5v14M5 12h14"/>'),
   users: svg('<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.2a6.5 6.5 0 0 1 3.5 5.8"/>'),
+  gem: svg('<path d="M6 3h12l4 6-10 12L2 9z"/><path d="M2 9h20M9 3l-2 6 5 12 5-12-2-6"/>'),
+  search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
+  settings: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
   end: svg('<path d="M3.5 14.5c5-4.5 12-4.5 17 0l-2.4 3a1.6 1.6 0 0 1-2.1.4l-2.1-1.3a3 3 0 0 0-3.2 0l-2.1 1.3a1.6 1.6 0 0 1-2.1-.4l-3-3z"/>')
 };
 const ico = name => h('span', { class: 'ico', html: I[name] });
@@ -223,20 +226,30 @@ function enter(data) {
 function renderMe() {
   const m = S.me;
   $('meBtn').replaceChildren(avatarEl(m, 36));
-  $('meChip').replaceChildren(avatarEl(m, 38), h('div', { class: 'mi' }, h('b', { text: m.name }), h('small', { text: 'Signed in with Google' })));
+  $('meChip').replaceChildren(avatarEl(m, 38), h('div', { class: 'mi' }, h('b', { text: m.name }), h('small', { text: '@' + m.username })), h('span', { class: 'chip-stone' }, gemEl(), String(m.stones || 0)));
   setAvatar($('accAvatar'), m);
-  $('accName').textContent = m.name; $('accNameInput').value = m.name;
+  $('accName').textContent = m.name; $('accNameInput').value = m.name; $('accHandle').textContent = '@' + m.username;
+  if (document.activeElement !== $('accUnameInput')) $('accUnameInput').value = m.username;
+  $('walletBal').textContent = m.stones || 0;
+  $('walletHint').textContent = 'Groups created: ' + m.owned + ' / ' + m.slots;
+  $('activeSwitch').checked = m.show_active !== false;
+  $('accPill').lastChild.textContent = m.show_active === false ? 'Hidden' : 'Online';
+  $('accPill').classList.toggle('off', m.show_active === false);
+  $('adminCard').hidden = !m.is_admin;
   $('kvSince').textContent = m.created_at ? new Date(m.created_at).toLocaleDateString([], { year: 'numeric', month: 'long', day: 'numeric' }) : '-';
 }
 const curGroup = () => S.groups.get(S.gid);
 function syncView() {
   const chat = S.view === 'chat', G = curGroup();
+  const mobile = matchMedia('(max-width:959px)').matches;
+  $('app').classList.toggle('home', mobile && chat && !G && S.groups.size > 0);   // phone: the chat list is the main page
   $('chatView').hidden = !(chat && G);
   $('welcome').hidden = !(chat && !G);
   $('accountView').hidden = S.view !== 'account';
+  $('adminView').hidden = S.view !== 'admin';
   const none = !S.groups.size;
   $('welcomeTitle').textContent = none ? 'Start your first group' : 'Select a chat';
-  $('welcomeText').textContent = none ? 'Create a private group and share its invite code, or join a friend\'s group with their code.' : 'Pick a group from the list, or create / join another one.';
+  $('welcomeText').textContent = none ? 'Create a private group and share its invite code, find one by name, or join a friend\'s group with their code.' : 'Pick a group from the list, or create / join another one.';
   renderHeader();
 }
 function showView(v) {
@@ -246,8 +259,8 @@ function showView(v) {
 function firstName(u) { return String(u.name || '').split(' ')[0] || 'Member'; }
 function renderHeader() {
   const G = curGroup(), chat = S.view === 'chat' && !!G;
-  $('roomTitle').textContent = S.view === 'account' ? 'My account' : G ? G.name : (BOOT.title || 'Chat');
-  $('grpAv').replaceChildren(avatarEl(G && S.view === 'chat' ? { id: G.id, name: G.name } : { id: 'sr-app', name: 'SR' }, 40));
+  $('roomTitle').textContent = S.view === 'account' ? 'My account' : S.view === 'admin' ? 'Admin panel' : G ? G.name : (BOOT.title || 'Chat');
+  $('grpAv').replaceChildren(G && S.view === 'chat' ? avatarEl({ id: G.id, name: G.name, avatar: G.avatar }, 40) : h('img', { class: 'logo-img hdr', src: '/static/logo.png', alt: '' }));
   $('grpBtn').disabled = !chat;
   for (const id of ['callBtn', 'voiceBtn']) $(id).hidden = !chat;
   let text = S.connText || '';
@@ -256,10 +269,56 @@ function renderHeader() {
       const on = new Set(G.online || []);
       text = [...G.members].sort((a, b) => (on.has(b.id) - on.has(a.id)) || a.name.localeCompare(b.name))
         .map(m => m.id === S.me.id ? 'You' : firstName(m)).join(', ');
-    } else text = S.view === 'account' ? 'Your profile' : 'Online';
+    } else text = S.view === 'account' ? 'Your profile' : S.view === 'admin' ? 'Manage Stone' : 'Online';
   }
   $('status').dataset.s = S.conn || 'wait';
   $('statusText').textContent = text;
+}
+function confirmDialog({ title, text, label = 'Confirm', danger = false, onConfirm }) {
+  return openModal(close => {
+    const go = h('button', { class: 'btn ' + (danger ? 'danger' : 'primary'), type: 'button' }, h('span', { class: 'spin' }), h('span', { class: 'label', text: label }));
+    go.onclick = async () => { busy(go, true); try { await onConfirm(); close(); } catch (e) { busy(go, false); toast(e.message, 'error'); } };
+    return h('div', { class: 'modal confirm' }, h('div', { class: 'cf-ico' + (danger ? ' danger' : '') }, ico(danger ? 'trash' : 'shield')),
+      h('h3', { text: title }), h('p', { text }), h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'), go));
+  });
+}
+const gemEl = () => h('span', { class: 'gem', 'aria-hidden': 'true' });
+function openBuyStone(note) {
+  const L = BOOT.limits || {}, packs = [10, 25, 50, 100];
+  openModal(close => {
+    let pick = 25;
+    const chips = packs.map(n => h('button', { type: 'button', class: 'pack' + (n === pick ? ' on' : ''), onclick: () => { pick = n; chips.forEach((c, i) => c.classList.toggle('on', packs[i] === n)); } }, gemEl(), h('b', { text: String(n) }), h('small', { text: 'Stone' })));
+    const go = h('button', { class: 'btn primary lg block', type: 'button' }, ico('send'), h('span', { text: 'Buy on Telegram' }));
+    go.onclick = () => {
+      const msg = 'Hi! I want to buy ' + pick + ' Stone for ' + (BOOT.title || 'Anonymous Group Chat') + '.\nUsername: @' + S.me.username + '\nUser ID: ' + S.me.id;
+      window.open('https://t.me/' + (BOOT.telegram || 'developer_bhai') + '?text=' + encodeURIComponent(msg), '_blank', 'noopener');
+    };
+    return h('div', { class: 'modal' }, h('h3', { text: 'Buy Stone' }),
+      note ? h('p', { class: 'warnline', text: note }) : null,
+      h('p', { text: 'Choose a pack, then talk to the admin on Telegram (@' + (BOOT.telegram || 'developer_bhai') + '). Your Stone is added to your account after payment.' }),
+      h('div', { class: 'packs' }, ...chips),
+      h('div', { class: 'costs' },
+        h('div', null, ico('plus'), h('span', { text: 'New group slot: ' + L.slot_cost + ' Stone' })),
+        h('div', null, ico('users'), h('span', { text: '+' + L.members_step + ' members for a group: ' + L.members_cost + ' Stone' }))),
+      go, h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Close')));
+  });
+}
+function openUnlockSlot() {
+  const L = BOOT.limits || {};
+  openModal(close => {
+    const enough = S.me.stones >= L.slot_cost;
+    const go = h('button', { class: 'btn primary', type: 'button' }, h('span', { class: 'spin' }), h('span', { class: 'label', text: enough ? 'Unlock for ' + L.slot_cost + ' Stone' : 'Buy Stone' }));
+    go.onclick = async () => {
+      if (!enough) { close(); return openBuyStone('You need ' + L.slot_cost + ' Stone to unlock a group slot.'); }
+      busy(go, true);
+      try { const r = await api('buy-slot', { token: S.token }); S.me = r.me; renderMe(); close(); toast('Group slot unlocked.', 'ok'); openGroupModal('create'); }
+      catch (e) { busy(go, false); toast(e.message, 'error'); }
+    };
+    return h('div', { class: 'modal confirm' }, h('div', { class: 'cf-ico' }, gemEl()), h('h3', { text: 'Group limit reached' }),
+      h('p', { text: 'Every user can create ' + L.free_groups + ' groups for free. Unlock one more group slot with Stone.' }),
+      h('div', { class: 'bal inline' }, gemEl(), h('b', { text: String(S.me.stones) }), h('small', { text: 'Stone in your wallet' })),
+      h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Not now'), go));
+  });
 }
 const openSide = () => { $('sidebar').classList.add('open'); };
 const closeSide = () => { $('sidebar').classList.remove('open'); };
@@ -296,7 +355,7 @@ function ask(ev, data) {
     S.sock.timeout(10000).emit(ev, data, (err, r) => {
       if (err) return rej(new Error('The server did not respond. Please try again.'));
       if (r && r.ok) return res(r);
-      rej(new Error((r && r.error) || 'Something went wrong.'));
+      rej(Object.assign(new Error((r && r.error) || 'Something went wrong.'), { code: r && r.code }));
     });
   });
 }
@@ -345,29 +404,35 @@ function connect() {
     if (d.gid === S.gid) feed.querySelectorAll('.msg[data-uid="' + d.uid + '"]').forEach(n => n.remove());
   });
   sock.on('profile_updated', onProfileUpdated);
+  sock.on('wallet_updated', d => { Object.assign(S.me, d); renderMe(); });
+  sock.on('group_joined', gp => { addGroup(gp); toast('Your request to join "' + gp.name + '" was approved.', 'ok'); });
+  sock.on('join_declined', d => toast('Your request to join "' + d.name + '" was declined.', 'info'));
+  sock.on('join_request', d => toast(d.name + ' wants to join "' + d.group + '".', 'info', 5200));
+  sock.on('group_deleted', d => { dropGroup(d.gid); toast('"' + d.name + '" was deleted by its owner.', 'info'); });
   sock.on('video_peer_joined', onPeerJoined);
   sock.on('video_peer_left', d => removePeer(d.sid));
   sock.on('peer_media', onPeerMedia);
   sock.on('webrtc_signal', handleSignal);
 }
 function onProfileUpdated(d) {
-  if (d.id === S.me.id) { S.me.name = d.name; S.me.avatar = d.avatar; renderMe(); }
+  if (d.id === S.me.id) { Object.assign(S.me, { name: d.name, username: d.username, avatar: d.avatar }); renderMe(); }
   for (const G of S.groups.values()) {
-    const m = G.members.find(x => x.id === d.id); if (m) { m.name = d.name; m.avatar = d.avatar; }
-    if (G.msgs) G.msgs.forEach(x => { if (x.uid === d.id) { x.name = d.name; x.avatar = d.avatar; } });
+    const m = G.members.find(x => x.id === d.id); if (m) { m.name = d.name; m.username = d.username; m.avatar = d.avatar; }
+    if (G.msgs) G.msgs.forEach(x => { if (x.uid === d.id) { x.name = d.name; x.username = d.username; x.avatar = d.avatar; } });
   }
   const u = { id: d.id, name: d.name, avatar: d.avatar };
   document.querySelectorAll('.avatar[data-uid="' + d.id + '"]').forEach(el => setAvatar(el, u));
-  document.querySelectorAll('.msg[data-uid="' + d.id + '"] .name').forEach(n => { n.textContent = d.name; });
+  document.querySelectorAll('.msg[data-uid="' + d.id + '"] .name .nm').forEach(n => { n.textContent = d.name; });
+  document.querySelectorAll('.msg[data-uid="' + d.id + '"] .name .un').forEach(n => { n.textContent = '@' + d.username; });
   for (const sid in C.peers) if (C.peers[sid].uid === d.id) { C.peers[sid].name = d.name; labelTile(sid); }
   renderHeader();
 }
-
 /* ------------------------------------------------------------------ groups & chat list */
 function addGroup(gp) {
   const G = Object.assign(S.groups.get(gp.id) || { msgs: null, unread: 0 }, gp);
   S.groups.set(gp.id, G);
   renderGroupList();
+  if (!S.gid) syncView();
   return G;
 }
 function onGroupsState(d) {
@@ -376,12 +441,11 @@ function onGroupsState(d) {
   if (!S.groups.has(S.gid)) S.gid = '';
   if (!S.gid) {
     const last = ls.get(LAST_KEY), first = S.groups.keys().next().value;
-    if (S.groups.has(last)) S.gid = last;
-    else if (first && matchMedia('(min-width:960px)').matches) S.gid = first;
+    if (matchMedia('(min-width:960px)').matches) S.gid = S.groups.has(last) ? last : (first || '');
   }
   renderGroupList();
   if (S.gid) selectGroup(S.gid);
-  else { syncView(); if (S.groups.size && matchMedia('(max-width:959px)').matches) openSide(); }
+  else syncView();
   updateCallUI();
   handlePendingJoin();
 }
@@ -399,14 +463,19 @@ function previewText(G) {
 function renderGroupList() {
   const rows = [...S.groups.values()].sort((a, b) => ((b.last && b.last.ts) || b.created_at) - ((a.last && a.last.ts) || a.created_at));
   $('chatCount').textContent = rows.length;
-  if (!rows.length) { $('chatList').replaceChildren(h('li', { class: 'chat-empty' }, 'No chats yet. Tap + to create a group or join one with an invite code.')); return; }
-  $('chatList').replaceChildren(...rows.map(G => h('li', null, h('button', { type: 'button', class: 'chat-row' + (G.id === S.gid && S.view === 'chat' ? ' on' : ''), onclick: () => selectGroup(G.id) },
-    avatarEl({ id: G.id, name: G.name }, 50),
-    h('div', { class: 'cr-main' },
-      h('div', { class: 'cr-top' }, h('b', { text: G.name }), h('time', { text: G.last ? shortTime(G.last.ts) : '' })),
-      h('div', { class: 'cr-bot' },
-        G.call && G.call.active ? h('span', { class: 'cr-call' }, ico('video'), 'Call in progress') : h('span', { class: 'cr-prev', text: previewText(G) }),
-        G.unread ? h('span', { class: 'badge-n', text: G.unread > 99 ? '99+' : String(G.unread) }) : null))))));
+  if (!rows.length) { $('chatList').replaceChildren(h('li', { class: 'chat-empty' }, 'No chats yet. Tap + to create a group, find one by name or join with an invite code.')); return; }
+  $('chatList').replaceChildren(...rows.map(G => {
+    const reqs = G.owner === S.me.id && G.pending_count > 0;
+    return h('li', null, h('button', { type: 'button', class: 'chat-row' + (G.id === S.gid && S.view === 'chat' ? ' on' : ''), onclick: () => selectGroup(G.id) },
+      avatarEl({ id: G.id, name: G.name, avatar: G.avatar }, 50),
+      h('div', { class: 'cr-main' },
+        h('div', { class: 'cr-top' }, h('b', { text: G.name }), h('time', { text: G.last ? shortTime(G.last.ts) : '' })),
+        h('div', { class: 'cr-bot' },
+          G.call && G.call.active ? h('span', { class: 'cr-call' }, ico('video'), 'Call in progress')
+            : reqs ? h('span', { class: 'cr-call' }, ico('users'), G.pending_count + ' join request' + (G.pending_count === 1 ? '' : 's'))
+            : h('span', { class: 'cr-prev', text: previewText(G) }),
+          G.unread ? h('span', { class: 'badge-n', text: G.unread > 99 ? '99+' : String(G.unread) }) : null))));
+  }));
 }
 async function selectGroup(gid) {
   const G = S.groups.get(gid); if (!G) return;
@@ -418,17 +487,25 @@ async function selectGroup(gid) {
   catch (e) { if (S.gid === gid) feed.replaceChildren(h('div', { class: 'empty' }, e.message)); return; }
   if (S.gid === gid && S.view === 'chat') renderHistory(G.msgs);
 }
-async function leaveGroup(gid) {
-  await ask('leave_group', { gid });
+function dropGroup(gid) {
   if (C.phase !== 'idle' && C.gid === gid) endCall(false);
   S.groups.delete(gid);
   if (S.gid === gid) {
-    S.gid = '';
+    S.gid = ''; clearReply();
     const first = S.groups.keys().next().value;
-    if (first && matchMedia('(min-width:960px)').matches) return selectGroup(first);
+    if (first && matchMedia('(min-width:960px)').matches) { selectGroup(first); return; }
   }
   syncView(); renderGroupList(); updateCallUI();
+}
+async function leaveGroup(gid) {
+  await ask('leave_group', { gid });
+  dropGroup(gid);
   toast('You left the group.', 'ok');
+}
+async function deleteGroup(gid) {
+  await ask('delete_group', { gid });
+  dropGroup(gid);
+  toast('Group deleted.', 'ok');
 }
 async function copyText(text, okMsg) {
   try { await navigator.clipboard.writeText(text); toast(okMsg, 'ok'); }
@@ -450,67 +527,223 @@ async function handlePendingJoin() {
 }
 function openGroupModal(tab = 'create') {
   openModal(close => {
-    let mode = tab;
+    let mode = tab, timer = 0, seq = 0;
     const nameIn = h('input', { class: 'input', placeholder: 'Group name', maxlength: '40', autocomplete: 'off', 'aria-label': 'Group name' });
     const codeIn = h('input', { class: 'input code-in', placeholder: 'XXXX-XXXX', maxlength: '9', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', 'aria-label': 'Invite code' });
+    const findIn = h('input', { class: 'input', placeholder: 'Search groups by name', maxlength: '40', autocomplete: 'off', 'aria-label': 'Search groups' });
+    const results = h('ul', { class: 'find-list' });
     const err = h('div', { class: 'err' }), info = h('p', {});
     const go = h('button', { class: 'btn primary', type: 'submit' }, h('span', { class: 'spin' }), h('span', { class: 'label' }));
-    const segC = h('button', { type: 'button' }, 'Create group'), segJ = h('button', { type: 'button' }, 'Join with code');
-    const fieldC = h('div', { class: 'field' }, nameIn), fieldJ = h('div', { class: 'field' }, codeIn);
+    const tabs = { create: h('button', { type: 'button' }, 'Create'), join: h('button', { type: 'button' }, 'Join code'), find: h('button', { type: 'button' }, 'Find') };
+    const fields = { create: h('div', { class: 'field' }, nameIn), join: h('div', { class: 'field' }, codeIn), find: h('div', { class: 'field' }, findIn) };
+    const L = BOOT.limits || {};
     const paint = () => {
-      segC.classList.toggle('on', mode === 'create'); segJ.classList.toggle('on', mode === 'join');
-      fieldC.hidden = mode !== 'create'; fieldJ.hidden = mode !== 'join';
+      for (const k in tabs) { tabs[k].classList.toggle('on', mode === k); fields[k].hidden = mode !== k; }
+      results.hidden = mode !== 'find'; go.hidden = mode === 'find';
       go.querySelector('.label').textContent = mode === 'create' ? 'Create group' : 'Join group';
-      info.textContent = mode === 'create' ? 'Create a private group, then share its invite code with the people you want to add.' : 'Enter the invite code someone shared with you.';
+      info.textContent = mode === 'create' ? 'Create a private group and share its invite code. Up to ' + L.base_members + ' members. You can create ' + (S.me.slots || L.free_groups) + ' groups (' + (S.me.owned || 0) + ' used).'
+        : mode === 'join' ? 'Enter the invite code someone shared with you.' : 'Search public groups by name, then join or send a request.';
       err.textContent = '';
-      setTimeout(() => (mode === 'create' ? nameIn : codeIn).focus(), 30);
+      setTimeout(() => ({ create: nameIn, join: codeIn, find: findIn })[mode].focus(), 30);
     };
-    segC.onclick = () => { mode = 'create'; paint(); }; segJ.onclick = () => { mode = 'join'; paint(); };
+    for (const k in tabs) tabs[k].onclick = () => { mode = k; paint(); };
     codeIn.addEventListener('input', () => { const v = codeIn.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8); codeIn.value = v.length > 4 ? v.slice(0, 4) + '-' + v.slice(4) : v; });
-    const form = h('form', { novalidate: true }, h('div', { class: 'seg' }, segC, segJ), info, fieldC, fieldJ, err,
-      h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'), go));
+    const joined = async (r, then) => {
+      if (r.status === 'pending') { toast('Request sent to "' + (r.name || 'the group') + '". You can chat once the owner approves.', 'ok', 5200); return false; }
+      close(); addGroup(r.group); await selectGroup(r.group.id);
+      toast(r.status === 'member' ? 'You are already in this group.' : 'You joined ' + r.group.name + '.', 'ok'); return true;
+    };
+    const renderResults = (rows, q) => {
+      if (!rows.length) { results.replaceChildren(h('li', { class: 'find-empty' }, q.length < 2 ? 'Type at least 2 letters.' : 'No public group found for "' + q + '".')); return; }
+      results.replaceChildren(...rows.map(g => {
+        const label = { open: 'Join', approval: 'Request', pending: 'Requested', member: 'Open', full: 'Full' }[g.status];
+        const btn = h('button', { type: 'button', class: 'btn sm' + (g.status === 'open' || g.status === 'approval' ? ' primary' : ''), disabled: g.status === 'pending' || g.status === 'full' }, label);
+        btn.onclick = async () => {
+          if (g.status === 'member') { close(); return selectGroup(g.id); }
+          busy(btn, true);
+          try {
+            const r = await ask('request_join', { gid: g.id });
+            if (r.status === 'pending') { g.status = 'pending'; btn.textContent = 'Requested'; btn.classList.remove('primary'); btn.disabled = true; busy(btn, false); btn.disabled = true; toast('Request sent. You can chat once the owner approves.', 'ok', 5200); }
+            else await joined(r);
+          } catch (e) { busy(btn, false); toast(e.message, 'error'); }
+        };
+        return h('li', null, avatarEl({ id: g.id, name: g.name, avatar: g.avatar }, 42),
+          h('div', { class: 'mi' }, h('b', { text: g.name }), h('small', { text: g.members + '/' + g.limit + ' members' + (g.status === 'approval' ? ' · approval needed' : '') })), btn);
+      }));
+    };
+    findIn.addEventListener('input', () => {
+      clearTimeout(timer); const q = findIn.value.trim(), my = ++seq;
+      if (q.length < 2) return renderResults([], q);
+      timer = setTimeout(async () => { try { const r = await ask('search_groups', { q }); if (my === seq) renderResults(r.results, q); } catch (e) { if (my === seq) results.replaceChildren(h('li', { class: 'find-empty' }, e.message)); } }, 260);
+    });
+    renderResults([], '');
+    const form = h('form', { novalidate: true }, h('div', { class: 'seg three' }, tabs.create, tabs.join, tabs.find), info, fields.create, fields.join, fields.find, results, err,
+      h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Close'), go));
     form.addEventListener('submit', async e => {
-      e.preventDefault(); err.textContent = ''; busy(go, true);
+      e.preventDefault(); err.textContent = '';
+      if (mode === 'find') return;
       try {
         if (mode === 'create') {
           const name = nameIn.value.trim(); if (!name) throw new Error('Enter a group name.');
+          if (S.me.owned >= S.me.slots) { close(); return openUnlockSlot(); }
+          busy(go, true);
           const r = await ask('create_group', { name });
+          if (r.me) { Object.assign(S.me, r.me); renderMe(); }
           close(); addGroup(r.group); await selectGroup(r.group.id); toast('Group created.', 'ok'); openGroupInfo();
         } else {
           if (codeIn.value.replace(/-/g, '').length < 8) throw new Error('Enter the 8-character invite code.');
-          const r = await ask('join_group', { code: codeIn.value });
-          close(); addGroup(r.group); await selectGroup(r.group.id);
-          toast(r.already ? 'You are already in this group.' : 'You joined ' + r.group.name + '.', 'ok');
+          busy(go, true);
+          await joined(await ask('join_group', { code: codeIn.value }));
+          busy(go, false);
         }
-      } catch (e2) { busy(go, false); err.textContent = e2.message; }
+      } catch (e2) { busy(go, false); if (e2.code === 'slots') { close(); return openUnlockSlot(); } err.textContent = e2.message; }
     });
     paint();
-    return h('div', { class: 'modal' }, h('h3', { text: 'New group' }), form);
+    return h('div', { class: 'modal' }, h('h3', { text: 'Groups' }), form);
   });
 }
+function memberRow(m, G, on) {
+  return h('li', null, h('span', { class: 'wrap' + (on.has(m.id) ? ' on' : '') }, avatarEl(m, 42)),
+    h('div', { class: 'mi' }, h('b', { text: m.name + (m.id === S.me.id ? ' (You)' : '') }), h('small', { text: m.username ? '@' + m.username : '' })),
+    m.id === G.owner ? h('span', { class: 'role', text: 'Owner' }) : (on.has(m.id) ? h('span', { class: 'role on', text: 'Online' }) : null));
+}
 function openGroupInfo() {
-  const G = curGroup(); if (!G) return;
+  const G0 = curGroup(); if (!G0) return;
   openModal(close => {
-    const code = G.code.slice(0, 4) + '-' + G.code.slice(4), on = new Set(G.online || []);
-    const members = [...G.members].sort((a, b) => (on.has(b.id) - on.has(a.id)) || a.name.localeCompare(b.name));
-    const lbl = h('span', { text: 'Leave group' }), leave = h('button', { class: 'btn danger', type: 'button' }, ico('logout'), lbl);
-    let armed = false, t;
-    leave.onclick = async () => {
-      if (!armed) { armed = true; lbl.textContent = 'Tap again to leave'; t = setTimeout(() => { armed = false; lbl.textContent = 'Leave group'; }, 4000); return; }
-      clearTimeout(t); busy(leave, true);
-      try { await leaveGroup(G.id); close(); } catch (e) { busy(leave, false); toast(e.message, 'error'); }
-    };
-    return h('div', { class: 'modal group-info' },
-      h('div', { class: 'gi-head' }, avatarEl({ id: G.id, name: G.name }, 60), h('div', null, h('h3', { text: G.name }), h('p', { text: G.members.length + ' member' + (G.members.length === 1 ? '' : 's') }))),
+    const G = G0, L = BOOT.limits || {}, isOwner = G.owner === S.me.id, on = new Set(G.online || []);
+    const members = [...G.members].sort((a, b) => (b.id === G.owner) - (a.id === G.owner) || (on.has(b.id) - on.has(a.id)) || a.name.localeCompare(b.name));
+    const code = G.code.slice(0, 4) + '-' + G.code.slice(4);
+    const top = h('div', { class: 'gi-top' },
+      h('div', { class: 'gi-hero' }, avatarEl({ id: G.id, name: G.name, avatar: G.avatar }, 68),
+        h('div', { class: 'gi-title' }, h('h3', { text: G.name }), h('p', { text: G.members.length + ' / ' + G.member_limit + ' members' + (G.approval ? ' · approval on' : '') })),
+        isOwner ? h('button', { class: 'icon-btn', type: 'button', title: 'Group settings', 'aria-label': 'Group settings', onclick: () => { close(); openGroupSettings(); } }, ico('settings')) : null),
       h('div', { class: 'invite' }, h('small', { text: 'Invite code' }), h('div', { class: 'code', text: code }),
         h('div', { class: 'row' },
           h('button', { class: 'btn', type: 'button', onclick: () => copyText(code, 'Invite code copied.') }, 'Copy code'),
           h('button', { class: 'btn primary', type: 'button', onclick: () => copyText(location.origin + '/?join=' + G.code, 'Invite link copied.') }, 'Copy link'))),
-      h('ul', { class: 'gi-members' }, ...members.map(m => h('li', null,
-        h('span', { class: 'wrap' + (on.has(m.id) ? ' on' : '') }, avatarEl(m, 38)),
-        h('div', { class: 'mi' }, h('b', { text: m.name + (m.id === S.me.id ? ' (You)' : '') }), h('small', { text: m.id === G.owner ? 'Group owner' : (on.has(m.id) ? 'Online' : '') }))))),
-      h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Close'), leave));
+      isOwner && G.pending_count ? h('button', { class: 'req-banner', type: 'button', onclick: () => { close(); openRequests(); } }, ico('users'), h('span', { text: G.pending_count + ' join request' + (G.pending_count === 1 ? '' : 's') }), h('i', { text: 'Review' })) : null,
+      isOwner && G.member_limit < L.max_members ? h('button', { class: 'extend', type: 'button', onclick: () => extendMembers(G, close) }, gemEl(), h('span', { text: 'Add +' + L.members_step + ' member slots' }), h('i', { text: L.members_cost + ' Stone' })) : null,
+      h('div', { class: 'gi-sub' }, h('b', { text: 'Members' }), h('span', { text: String(G.members.length) })));
+    const list = h('ul', { class: 'gi-members' }, ...members.map(m => memberRow(m, G, on)));
+    const danger = isOwner
+      ? h('button', { class: 'btn danger', type: 'button', onclick: () => { close(); confirmDialog({ title: 'Delete "' + G.name + '"?', text: 'This permanently deletes the group and all of its messages for every member. This cannot be undone.', label: 'Delete group', danger: true, onConfirm: () => deleteGroup(G.id) }); } }, ico('trash'), h('span', { text: 'Delete group' }))
+      : h('button', { class: 'btn danger', type: 'button', onclick: () => { close(); confirmDialog({ title: 'Leave "' + G.name + '"?', text: 'You will no longer receive messages from this group. You can join again with the invite code.', label: 'Leave group', danger: true, onConfirm: () => leaveGroup(G.id) }); } }, ico('logout'), h('span', { text: 'Leave group' }));
+    return h('div', { class: 'modal sheet group-info' }, top, list, h('div', { class: 'gi-actions' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Close'), danger));
   });
+}
+async function extendMembers(G, close) {
+  const L = BOOT.limits || {};
+  if (S.me.stones < L.members_cost) { close(); return openBuyStone('You need ' + L.members_cost + ' Stone to add ' + L.members_step + ' more member slots.'); }
+  close();
+  confirmDialog({ title: 'Add ' + L.members_step + ' member slots?', text: 'This costs ' + L.members_cost + ' Stone. "' + G.name + '" will hold up to ' + Math.min(L.max_members, G.member_limit + L.members_step) + ' members.', label: 'Pay ' + L.members_cost + ' Stone',
+    onConfirm: async () => { const r = await api('extend-members', { token: S.token, gid: G.id }); Object.assign(S.me, r.me); renderMe(); addGroup(r.group); toast('Member limit increased.', 'ok'); } });
+}
+async function openRequests() {
+  const G = curGroup(); if (!G) return;
+  let rows;
+  try { rows = (await ask('get_requests', { gid: G.id })).requests; } catch (e) { return toast(e.message, 'error'); }
+  openModal(close => {
+    const ul = h('ul', { class: 'req-list' });
+    const draw = () => {
+      ul.replaceChildren(...(rows.length ? rows.map(u => {
+        const done = async approve => {
+          try { await ask('resolve_request', { gid: G.id, uid: u.id, approve }); rows = rows.filter(x => x.id !== u.id); draw(); toast(approve ? u.name + ' joined the group.' : 'Request declined.', approve ? 'ok' : 'info'); }
+          catch (e) { toast(e.message, 'error'); if (e.code === 'full') { close(); } }
+        };
+        return h('li', null, avatarEl(u, 42), h('div', { class: 'mi' }, h('b', { text: u.name }), h('small', { text: '@' + u.username })),
+          h('button', { class: 'btn sm', type: 'button', onclick: () => done(false) }, 'Decline'), h('button', { class: 'btn sm primary', type: 'button', onclick: () => done(true) }, 'Approve'));
+      }) : [h('li', { class: 'find-empty' }, 'No pending requests.')]));
+    };
+    draw();
+    return h('div', { class: 'modal sheet' }, h('h3', { text: 'Join requests' }), h('p', { text: 'People who asked to join "' + G.name + '".' }), ul, h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Close')));
+  });
+}
+function openGroupSettings() {
+  const G = curGroup(); if (!G || G.owner !== S.me.id) return;
+  openModal(close => {
+    let logo = G.avatar || '', logoData = null, removed = false;
+    const prev = h('div', { class: 'gs-logo' });
+    const paintLogo = () => prev.replaceChildren(avatarEl({ id: G.id, name: nameIn.value || G.name, avatar: removed ? '' : (logoData || logo) }, 84));
+    const nameIn = h('input', { class: 'input', value: G.name, maxlength: '40', 'aria-label': 'Group name' });
+    nameIn.addEventListener('input', paintLogo);
+    const file = h('input', { type: 'file', accept: 'image/*', hidden: true });
+    file.onchange = async () => {
+      const f = file.files[0]; file.value = ''; if (!f) return;
+      if (!/^image\//.test(f.type)) return toast('Please choose an image file.', 'error');
+      try { logoData = (await cropAvatar(f, 256)).data; removed = false; paintLogo(); } catch (e) { toast(e.message, 'error'); }
+    };
+    const sw = (key, title, sub, val) => { const cb = h('input', { type: 'checkbox' }); cb.checked = val; return { cb, row: h('label', { class: 'switch-row' }, h('span', null, h('b', { text: title }), h('small', { text: sub })), h('span', { class: 'switch' }, cb, h('i'))) }; };
+    const approval = sw('approval', 'Approve new members', 'New people must be approved by you before joining.', G.approval);
+    const pub = sw('public', 'Show in search', 'Anyone can find this group by name. Turn off to keep it invite-only.', G.public !== false);
+    const err = h('div', { class: 'err' });
+    const save = h('button', { class: 'btn primary', type: 'button' }, h('span', { class: 'spin' }), h('span', { class: 'label', text: 'Save changes' }));
+    save.onclick = async () => {
+      const name = nameIn.value.trim().replace(/\s+/g, ' ');
+      if (!name) { err.textContent = 'Group name cannot be empty.'; return; }
+      const payload = { gid: G.id, name, approval: approval.cb.checked, public: pub.cb.checked };
+      if (logoData) payload.avatar = logoData; else if (removed) payload.avatar = '';
+      busy(save, true); err.textContent = '';
+      try { const r = await ask('update_group', payload); addGroup(r.group); renderHeader(); close(); toast('Group updated.', 'ok'); }
+      catch (e) { busy(save, false); err.textContent = e.message; }
+    };
+    paintLogo();
+    return h('div', { class: 'modal sheet' }, h('h3', { text: 'Group settings' }),
+      h('div', { class: 'gs-top' }, prev, h('div', { class: 'row left' }, h('button', { class: 'btn sm', type: 'button', onclick: () => file.click() }, ico('camera'), 'Change logo'), h('button', { class: 'btn sm', type: 'button', onclick: () => { removed = true; logoData = null; paintLogo(); } }, 'Remove'), file)),
+      h('label', { class: 'field' }, h('span', { text: 'Group name' }), nameIn), approval.row, pub.row, err,
+      h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'), save));
+  });
+}
+async function openHistory() {
+  let d; try { d = await api('wallet', { token: S.token }); } catch (e) { return toast(e.message, 'error'); }
+  Object.assign(S.me, d.me); renderMe();
+  openModal(close => h('div', { class: 'modal sheet' }, h('h3', { text: 'Stone history' }),
+    d.log.length ? h('ul', { class: 'hist' }, ...d.log.map(r => h('li', null, h('div', null, h('b', { text: r.why || 'Update' }), h('small', { text: new Date(r.ts).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) })),
+      h('span', { class: 'delta ' + (r.delta >= 0 ? 'up' : 'down'), text: (r.delta >= 0 ? '+' : '') + r.delta })))) : h('p', { text: 'No Stone activity yet.' }),
+    h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Close'))));
+}
+
+/* ------------------------------------------------------------------ admin panel */
+function renderAdmin(users, total) {
+  $('adminCount').textContent = total + ' user' + (total === 1 ? '' : 's') + ' in total' + (users.length < total ? ' · showing ' + users.length : '');
+  $('adminList').replaceChildren(...users.map(u => {
+    const bal = h('b', { text: String(u.stones) }), amt = h('input', { type: 'number', inputmode: 'numeric', placeholder: 'Amount', 'aria-label': 'Amount' });
+    const act = async (op, amount, btn) => {
+      const n = Number(amount); if (!Number.isInteger(n)) return toast('Enter a whole number.', 'error');
+      if (btn) busy(btn, true);
+      try { const r = await api('admin/stone', { token: S.token, uid: u.id, op, amount: n }); bal.textContent = r.user.stones; amt.value = ''; toast((u.name) + ': ' + r.user.stones + ' Stone', 'ok'); }
+      catch (e) { toast(e.message, 'error'); } finally { if (btn) busy(btn, false); }
+    };
+    const addB = h('button', { class: 'btn sm primary', type: 'button', onclick: () => act('add', amt.value, addB) }, 'Add'), setB = h('button', { class: 'btn sm', type: 'button', onclick: () => act('set', amt.value, setB) }, 'Set');
+    return h('li', null, h('div', { class: 'au-top' }, avatarEl(u, 44), h('div', { class: 'mi' }, h('b', { text: u.name }), h('small', { text: '@' + u.username + (u.email ? ' · ' + u.email : '') })), h('span', { class: 'au-bal' }, gemEl(), bal)),
+      h('div', { class: 'au-ctl' }, ...[10, 50, 100].map(n => h('button', { class: 'btn sm', type: 'button', onclick: () => act('add', n) }, '+' + n)), amt, addB, setB));
+  }));
+  if (!users.length) $('adminList').replaceChildren(h('li', { class: 'find-empty' }, 'No users found.'));
+}
+let adminTimer = 0;
+async function loadAdmin() {
+  clearTimeout(adminTimer);
+  adminTimer = setTimeout(async () => {
+    try { const r = await api('admin/users', { token: S.token, q: $('adminSearch').value }); renderAdmin(r.users, r.total); }
+    catch (e) { toast(e.message, 'error'); }
+  }, 220);
+}
+function openAdmin() { showView('admin'); $('adminSearch').value = ''; loadAdmin(); }
+
+/* ------------------------------------------------------------------ profile extras */
+async function saveUsername(e) {
+  e.preventDefault();
+  const v = $('accUnameInput').value.trim().toLowerCase();
+  if (!/^[a-z0-9_-]{3,12}$/.test(v)) return toast('Username must be 3-12 characters: small letters, numbers, _ or -', 'error');
+  if (v === S.me.username) return toast('Nothing to update.', 'info');
+  busy($('unameSave'), true);
+  try { const r = await api('profile', { token: S.token, username: v }); Object.assign(S.me, r.me); renderMe(); toast('Username updated.', 'ok'); }
+  catch (err) { toast(err.message, 'error'); }
+  finally { busy($('unameSave'), false); }
+}
+async function saveActive() {
+  const want = $('activeSwitch').checked;
+  try { const r = await api('profile', { token: S.token, show_active: want }); Object.assign(S.me, r.me); renderMe(); toast(want ? 'Others can see when you are active.' : 'You now appear offline.', 'ok'); }
+  catch (err) { $('activeSwitch').checked = !want; toast(err.message, 'error'); }
 }
 function updateCallUI() {
   const G = curGroup(), ci = (G && G.call) || { active: false, participants: 0, started_by: '' }, active = !!ci.active, who = ci.started_by || 'A member';
@@ -579,7 +812,8 @@ function buildMessage(m) {
   S.lastMsg = { uid: m.uid, ts: m.ts };
   const row = h('div', { class: 'msg' + (mine ? ' mine' : '') + (cont ? ' cont' : ''), dataset: { id: m.id, uid: m.uid } });
   const bubble = h('div', { class: 'bubble' });
-  if (!mine && !cont) bubble.append(h('div', { class: 'name', style: '--h:' + hue(String(m.uid || m.name || '')), text: m.name || m.username || 'Member' }));
+  if (!mine && !cont) bubble.append(h('div', { class: 'name', style: '--h:' + hue(String(m.uid || m.name || '')) },
+    h('span', { class: 'nm', text: m.name || 'Member' }), m.username ? h('span', { class: 'un', text: '@' + m.username }) : null));
   if (m.reply_to) {
     const rid = m.reply_to.id;
     bubble.append(h('div', {
@@ -600,7 +834,8 @@ function buildMessage(m) {
   const tools = h('div', { class: 'tools' },
     ...(BOOT.reactions || []).map(em => h('button', { type: 'button', class: 'tool', title: 'React ' + em, 'aria-label': 'React ' + em, onclick: () => { react(m.id, em); row.classList.remove('tools-open'); } }, em)),
     h('button', { type: 'button', class: 'tool', title: 'Reply', 'aria-label': 'Reply', onclick: () => { startReply(m); row.classList.remove('tools-open'); } }, ico('reply')));
-  row.append(avatarEl({ id: m.uid, name: m.name || m.username, avatar: m.avatar }, 34), h('div', { class: 'col' }, bubble, h('div', { class: 'reactions' })), tools);
+  row.append(avatarEl({ id: m.uid, name: m.name || m.username, avatar: m.avatar }, 34), h('div', { class: 'col' }, bubble, h('div', { class: 'reactions' })),
+    h('button', { type: 'button', class: 'quick-reply', title: 'Reply', 'aria-label': 'Reply', onclick: () => startReply(m) }, ico('reply')), tools);
   paintReactions(row, m.reactions);
   frag.append(row);
   return frag;
@@ -643,13 +878,13 @@ function sendMessage(e) {
 }
 
 /* ------------------------------------------------------------------ account page */
-async function cropAvatar(file) {
+async function cropAvatar(file, size = 384) {
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('That image could not be opened. Try a JPG or PNG.')); i.src = url; });
     const side = Math.min(img.naturalWidth, img.naturalHeight), sx = (img.naturalWidth - side) / 2, sy = (img.naturalHeight - side) / 2;
-    const c = document.createElement('canvas'); c.width = c.height = 384;
-    const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 384, 384); ctx.drawImage(img, sx, sy, side, side, 0, 0, 384, 384);
+    const c = document.createElement('canvas'); c.width = c.height = size;
+    const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, size, size); ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
     let q = .86, data = c.toDataURL('image/jpeg', q);
     while (data.length > 380000 && q > .4) { q -= .1; data = c.toDataURL('image/jpeg', q); }
     return { canvas: c, data };
@@ -1060,7 +1295,14 @@ function init() {
     try { const r = await api('profile', { token: S.token, avatar: '' }); S.me = r.me; renderMe(); toast('Profile photo removed.', 'ok'); } catch (e) { toast(e.message, 'error'); }
   };
   $('nameForm').addEventListener('submit', saveName);
-  $('signOutBtn').onclick = signOut; $('deleteBtn').onclick = confirmDelete;
+  $('signOutBtn').onclick = () => confirmDialog({ title: 'Sign out?', text: 'You will need to sign in with Google again on this device. Your groups and messages stay safe.', label: 'Sign out', onConfirm: signOut });
+  $('deleteBtn').onclick = confirmDelete;
+  $('unameForm').addEventListener('submit', saveUsername);
+  $('accUnameInput').addEventListener('input', e => { e.target.value = e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 12); });
+  $('activeSwitch').addEventListener('change', saveActive);
+  $('buyStoneBtn').onclick = () => openBuyStone(); $('historyBtn').onclick = openHistory;
+  $('adminOpenBtn').onclick = openAdmin; $('adminBack').onclick = () => showView('account'); $('adminSearch').addEventListener('input', loadAdmin);
+  matchMedia('(max-width:959px)').addEventListener('change', () => { if (S.me) syncView(); });
   document.querySelectorAll('#themeSeg button').forEach(b => { b.onclick = () => applyTheme(b.dataset.theme); });
 
   $('lobbyMic').onclick = $('micBtn').onclick = toggleMic;

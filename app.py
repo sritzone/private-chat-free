@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger("sr-chat")
 
 # --------------------------------------------------------------------------- config
-ROOM_TITLE = (os.environ.get("ROOM_TITLE") or os.environ.get("FFX-G") or "SR Private Chat")[:60]
+ROOM_TITLE = (os.environ.get("ROOM_TITLE") or "Anonymous Group Chat")[:60]
 SESSION_TTL_MS = 30 * 24 * 3600 * 1000      # sessions last 30 days
 AUTH_RECHECK = 300                           # seconds a verified token is trusted from memory
 HISTORY_SEND = 100                           # messages sent to a client on connect
@@ -50,7 +50,24 @@ FIREBASE_WEB_API_KEY = os.environ.get("FIREBASE_WEB_API_KEY", "").strip()      #
 FIREBASE_AUTH_DOMAIN = os.environ.get("FIREBASE_AUTH_DOMAIN", "").strip()      # default: <project_id>.firebaseapp.com
 FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "").strip()
 DEV_LOGIN = os.environ.get("LOCAL_DEV") == "1" and not FIREBASE_WEB_API_KEY   # local testing only
-MAX_GROUPS_OWNED, MAX_GROUPS_JOINED, MAX_MEMBERS = 10, 30, 50
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
+TELEGRAM_ADMIN = (os.environ.get("TELEGRAM_ADMIN") or "developer_bhai").lstrip("@")
+FREE_GROUPS = _env_int("FREE_GROUPS", 2)                  # groups every user may create for free
+GROUP_SLOT_COST = _env_int("GROUP_SLOT_COST", 10)         # Stone for one more group slot
+BASE_MEMBER_LIMIT = _env_int("BASE_MEMBER_LIMIT", 25)     # members per new group
+MEMBER_EXTEND_STEP = _env_int("MEMBER_EXTEND_STEP", 25)   # extra members per purchase
+MEMBER_EXTEND_COST = _env_int("MEMBER_EXTEND_COST", 10)   # Stone per purchase
+MAX_MEMBER_LIMIT = _env_int("MAX_MEMBER_LIMIT", 200)
+MAX_GROUPS_JOINED, MAX_PENDING = 30, 50
+USERNAME_RE = re.compile(r"[a-z0-9_-]{3,12}")
+RESERVED_USERNAMES = {"system", "support", "root"}
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 REACTIONS = ("👍", "❤️", "😂", "😮", "😢", "🔥")
 SESSION_CODES = {
@@ -86,7 +103,7 @@ class MemoryStore:
 
     def __init__(self):
         self.lock = threading.RLock()
-        self.users, self.sessions, self.groups, self.gmsgs = {}, {}, {}, {}
+        self.users, self.sessions, self.groups, self.gmsgs, self.usernames = {}, {}, {}, {}, {}
 
     # ---- users / sessions
     def get_user(self, key):
@@ -185,6 +202,32 @@ class MemoryStore:
             self.groups.pop(gid, None)
             self.gmsgs.pop(gid, None)
 
+    # ---- usernames / pending join requests
+    def claim_username(self, name, uid):
+        with self.lock:
+            if name in self.usernames:
+                return self.usernames[name] == uid
+            self.usernames[name] = uid
+            return True
+
+    def release_username(self, name):
+        with self.lock:
+            self.usernames.pop(name, None)
+
+    def add_pending(self, gid, uid):
+        with self.lock:
+            g = self.groups.get(gid)
+            if g is not None:
+                p = g.setdefault("pending", [])
+                if uid not in p:
+                    p.append(uid)
+
+    def remove_pending(self, gid, uid):
+        with self.lock:
+            g = self.groups.get(gid)
+            if g is not None and uid in g.get("pending", []):
+                g["pending"].remove(uid)
+
     # ---- messages (per group)
     def recent_messages(self, gid, limit):
         with self.lock:
@@ -223,6 +266,7 @@ class FirestoreStore:
         self.users = self.db.collection("chat_users")
         self.sessions = self.db.collection("chat_sessions")
         self.groups = self.db.collection("chat_groups")      # chat_groups/{gid}/messages/{mid}
+        self.unames = self.db.collection("chat_usernames")   # unique usernames: {username: {uid}}
 
     def _eq(self, coll, field, value):
         try:
@@ -328,6 +372,29 @@ class FirestoreStore:
         self._batch_delete(self._msgs(gid).stream())
         self.groups.document(gid).delete()
 
+    # ---- usernames / pending join requests
+    def claim_username(self, name, uid):
+        ref = self.unames.document(name)
+
+        @self.fs.transactional
+        def run(tx):
+            snap = ref.get(transaction=tx)
+            if snap.exists:
+                return (snap.to_dict() or {}).get("uid") == uid
+            tx.set(ref, {"uid": uid, "ts": now_ms()})
+            return True
+
+        return run(self.db.transaction())
+
+    def release_username(self, name):
+        self.unames.document(name).delete()
+
+    def add_pending(self, gid, uid):
+        self.groups.document(gid).update({"pending": self.fs.ArrayUnion([uid])})
+
+    def remove_pending(self, gid, uid):
+        self.groups.document(gid).update({"pending": self.fs.ArrayRemove([uid])})
+
     # ---- messages (per group, no composite index needed)
     def recent_messages(self, gid, limit):
         out = []
@@ -425,7 +492,8 @@ class Limiter:
             self.h.pop(key, None)
 
 
-login_gate, me_gate, chat_gate, group_gate, join_gate = Limiter(), Limiter(), Limiter(), Limiter(), Limiter()
+login_gate, me_gate, chat_gate, group_gate, join_gate, uname_gate, search_gate, admin_gate = (
+    Limiter(), Limiter(), Limiter(), Limiter(), Limiter(), Limiter(), Limiter(), Limiter())
 
 # --------------------------------------------------------------------------- directory (users + avatars)
 directory = {}          # uid -> info
@@ -459,7 +527,10 @@ def dir_put(key, prof):
         mime, raw = parsed
         ver = hashlib.sha1(raw).hexdigest()[:10]
     info = {"uid": uid, "key": key, "name": prof.get("name", ""), "username": prof.get("username", ""),
-            "created_at": prof.get("created_at", 0), "avatar_mime": mime, "avatar_raw": raw, "avatar_ver": ver}
+            "email": str(prof.get("email", "")), "created_at": prof.get("created_at", 0),
+            "stones": int(prof.get("stones", 0) or 0), "extra_slots": int(prof.get("extra_slots", 0) or 0),
+            "stone_log": list(prof.get("stone_log") or []), "show_active": prof.get("show_active", True) is not False,
+            "avatar_mime": mime, "avatar_raw": raw, "avatar_ver": ver}
     with dir_lock:
         directory[uid] = info
         missing_uids.discard(uid)
@@ -488,10 +559,49 @@ def avatar_url(uid):
     return ""
 
 
+def is_admin(uid):
+    info = directory.get(uid) or {}
+    email = (info.get("email") or "").lower()
+    return bool(email and email in ADMIN_EMAILS) or bool(DEV_LOGIN and info.get("username") == "admin")
+
+
+def owned_count(uid):
+    with groups_lock:
+        return sum(1 for gid in user_groups.get(uid, ()) if groups.get(gid, {}).get("owner") == uid)
+
+
+def slot_limit(uid):
+    return FREE_GROUPS + (directory.get(uid) or {}).get("extra_slots", 0)
+
+
 def public_user(uid):
     info = directory[uid]
-    return {"id": uid, "name": info["name"], "username": info["username"],
-            "avatar": avatar_url(uid), "created_at": info["created_at"]}
+    return {"id": uid, "name": info["name"], "username": info["username"], "avatar": avatar_url(uid),
+            "created_at": info["created_at"], "stones": info["stones"], "show_active": info["show_active"],
+            "is_admin": is_admin(uid), "owned": owned_count(uid), "slots": slot_limit(uid)}
+
+
+def valid_username(u):
+    return bool(USERNAME_RE.fullmatch(u)) and u not in RESERVED_USERNAMES
+
+
+def make_username(name, email, uid):
+    """Claim a unique username (a-z, 0-9, _ -, 3-12 chars) derived from the display name."""
+    base = re.sub(r"[^a-z0-9]", "", str(name).casefold())[:8]
+    if len(base) < 3:
+        base = re.sub(r"[^a-z0-9]", "", str(email).split("@")[0].casefold())[:8]
+    if len(base) < 3:
+        base = "user"
+    for attempt in range(40):
+        cand = base if attempt == 0 else base[:12 - (2 + attempt // 10)] + "".join(secrets.choice("0123456789") for _ in range(2 + attempt // 10))
+        if valid_username(cand) and store.claim_username(cand, uid):
+            return cand
+    cand = "u" + secrets.token_hex(5)
+    store.claim_username(cand, uid)
+    return cand
+
+
+wallet_lock = threading.RLock()
 
 
 # --------------------------------------------------------------------------- auth cache
@@ -573,9 +683,19 @@ def new_code():
             return c
 
 
+def _set_group_avatar(g, data_url):
+    parsed = decode_avatar(data_url or "")
+    g["avatar"] = data_url if parsed else ""
+    g["avatar_ver"] = hashlib.sha1(parsed[1]).hexdigest()[:10] if parsed else ""
+    g["avatar_mime"], g["avatar_raw"] = parsed if parsed else (None, None)
+
+
 def register_group(gid, doc):
     g = {"id": gid, "name": doc.get("name", "Group"), "code": doc.get("code", ""), "owner": doc.get("owner", ""),
-         "members": list(doc.get("members") or []), "created_at": doc.get("created_at", 0)}
+         "members": list(doc.get("members") or []), "created_at": doc.get("created_at", 0),
+         "approval": bool(doc.get("approval", False)), "public": doc.get("public", True) is not False,
+         "member_limit": int(doc.get("member_limit") or BASE_MEMBER_LIMIT), "pending": list(doc.get("pending") or [])}
+    _set_group_avatar(g, doc.get("avatar") or "")
     with groups_lock:
         groups[gid] = g
         if g["code"]:
@@ -705,6 +825,10 @@ def last_preview(gid):
     return {"text": str(m.get("text", ""))[:80], "name": m.get("name", ""), "uid": m.get("uid", ""), "ts": m.get("ts", 0), "kind": m.get("kind", "user")}
 
 
+def group_avatar_url(g):
+    return "/gavatar/%s?v=%s" % (g["id"], g["avatar_ver"]) if g.get("avatar_raw") else ""
+
+
 # --------------------------------------------------------------------------- realtime state
 online = {}             # sid -> {"uid","token"}
 online_lock = threading.RLock()
@@ -723,6 +847,23 @@ def call_payload(gid):
             "started_by": (directory.get(starter) or {}).get("name", "A member"), "uids": [u for u in uids if u]}
 
 
+def online_uids():
+    """Online people who have not hidden their active status."""
+    with online_lock:
+        uids = {u["uid"] for u in online.values()}
+    return {u for u in uids if (directory.get(u) or {}).get("show_active", True)}
+
+
+def sids_of(uid):
+    with online_lock:
+        return [s for s, u in online.items() if u["uid"] == uid]
+
+
+def enter_user_rooms(uid, gid):
+    for sid in sids_of(uid):
+        socketio.server.enter_room(sid, room(gid), namespace="/")
+
+
 def group_public(gid):
     g = groups[gid]
     members = []
@@ -730,9 +871,10 @@ def group_public(gid):
         info = directory.get(uid) or info_for(uid)
         if info:
             members.append({"id": uid, "name": info["name"], "username": info["username"], "avatar": avatar_url(uid)})
-    with online_lock:
-        on = {u["uid"] for u in online.values()}
+    on = online_uids()
     return {"id": gid, "name": g["name"], "code": g["code"], "owner": g["owner"], "created_at": g["created_at"],
+            "avatar": group_avatar_url(g), "approval": g["approval"], "public": g["public"],
+            "member_limit": g["member_limit"], "pending_count": len(g["pending"]),
             "members": members, "online": [u for u in g["members"] if u in on],
             "call": call_payload(gid), "last": last_preview(gid)}
 
@@ -746,8 +888,7 @@ def emit_group_presence(gid):
     g = groups.get(gid)
     if not g:
         return
-    with online_lock:
-        on = {u["uid"] for u in online.values()}
+    on = online_uids()
     socketio.emit("group_presence", {"gid": gid, "online": [u for u in g["members"] if u in on],
                                      "call": call_payload(gid)}, to=room(gid))
 
@@ -841,6 +982,28 @@ def member_gid(sender, data):
     return gid if g and sender["uid"] in g["members"] else None
 
 
+def stone_change(uid, delta=None, set_to=None, why=""):
+    """Add/remove Stone (delta) or set an exact balance. Raises ValueError when the balance would go below 0."""
+    with wallet_lock:
+        info = directory[uid]
+        cur = info["stones"]
+        new = cur + delta if delta is not None else int(set_to)
+        if new < 0:
+            raise ValueError("Not enough Stone")
+        entry = {"ts": now_ms(), "delta": new - cur, "balance": new, "why": str(why)[:60]}
+        log = (info.get("stone_log") or [])[-29:] + [entry]
+        store.update_user(info["key"], {"stones": new, "stone_log": log})
+        info["stones"], info["stone_log"] = new, log
+    push_wallet(uid)
+    return new
+
+
+def push_wallet(uid):
+    me_ = public_user(uid)
+    for sid in sids_of(uid):
+        socketio.emit("wallet_updated", {"stones": me_["stones"], "owned": me_["owned"], "slots": me_["slots"]}, to=sid)
+
+
 # --------------------------------------------------------------------------- HTTP helpers
 def api_error(message, status=400):
     return jsonify(error=message), status
@@ -911,7 +1074,9 @@ def home():
     boot = {"title": ROOM_TITLE, "rtc": rtc_config(), "reactions": list(REACTIONS),
             "firebase": ({"apiKey": FIREBASE_WEB_API_KEY, "projectId": FIREBASE_PROJECT_ID,
                           "authDomain": FIREBASE_AUTH_DOMAIN or ("%s.firebaseapp.com" % FIREBASE_PROJECT_ID)} if FIREBASE_AUTH_ON else None),
-            "dev_login": DEV_LOGIN}
+            "dev_login": DEV_LOGIN, "telegram": TELEGRAM_ADMIN,
+            "limits": {"free_groups": FREE_GROUPS, "slot_cost": GROUP_SLOT_COST, "base_members": BASE_MEMBER_LIMIT,
+                       "members_step": MEMBER_EXTEND_STEP, "members_cost": MEMBER_EXTEND_COST, "max_members": MAX_MEMBER_LIMIT}}
     return render_template("index.html", room_title=ROOM_TITLE, boot=boot, nonce=g.nonce)
 
 
@@ -932,6 +1097,22 @@ def avatar(uid):
     resp.headers["ETag"] = etag
     resp.headers["Cache-Control"] = ("public, max-age=31536000, immutable"
                                      if request.args.get("v") == info["avatar_ver"] else "public, max-age=60")
+    resp.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
+    return resp
+
+
+@app.get("/gavatar/<gid>")
+def group_avatar(gid):
+    g = groups.get(gid[:40])
+    if not g or not g.get("avatar_raw"):
+        return Response(status=404, headers={"Cache-Control": "public, max-age=60"})
+    etag = '"%s"' % g["avatar_ver"]
+    if request.headers.get("If-None-Match") == etag:
+        return Response(status=304, headers={"ETag": etag})
+    resp = Response(g["avatar_raw"], mimetype=g["avatar_mime"])
+    resp.headers["ETag"] = etag
+    resp.headers["Cache-Control"] = ("public, max-age=31536000, immutable"
+                                     if request.args.get("v") == g["avatar_ver"] else "public, max-age=60")
     resp.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
     return resp
 
@@ -965,17 +1146,29 @@ def fetch_google_avatar(url):
         return ""
 
 
-def finish_login(key, name, username, email="", picture=""):
+def finish_login(key, name, email="", picture=""):
     prof = store.get_user(key)
     if not prof:
-        prof = {"uid": uuid.uuid4().hex, "name": name[:40] or "Member", "username": username, "email": email,
-                "created_at": now_ms()}
+        uid = uuid.uuid4().hex
+        username = make_username(name, email, uid)
+        prof = {"uid": uid, "name": name[:40] or "Member", "username": username, "email": email,
+                "created_at": now_ms(), "stones": 0, "show_active": True}
         avatar_data = fetch_google_avatar(picture) if picture else ""
         if avatar_data:
             prof["avatar"] = avatar_data
         if not store.create_user(key, prof):
+            store.release_username(username)
             prof = store.get_user(key) or prof
-    uid = prof.get("uid") or key
+    else:
+        uid = prof.get("uid") or key
+        fix = {}
+        if not valid_username(str(prof.get("username") or "")):      # accounts made before usernames existed
+            fix["username"] = make_username(prof.get("name") or name, email, uid)
+        if email and prof.get("email") != email:
+            fix["email"] = email
+        if fix:
+            store.update_user(key, fix)
+            prof.update(fix)
     dir_put(key, prof)
     token = make_session(uid, key)
     return jsonify(token=token, me=public_user(uid))
@@ -998,7 +1191,7 @@ def google_login():
         return api_error("Google sign-in failed. Please try again.", 401)
     email = str(info.get("email") or "")
     name = clean_spaces(info.get("name")) or re.sub(r"[^A-Za-z0-9_.]", "", email.split("@")[0])[:20] or "Member"
-    return finish_login("fb_" + str(info["uid"]), name, "", email, str(info.get("picture") or ""))
+    return finish_login("fb_" + str(info["uid"]), name, email, str(info.get("picture") or ""))
 
 
 @app.post("/api/dev-login")
@@ -1010,7 +1203,7 @@ def dev_login():
     slug = re.sub(r"[^a-z0-9]", "", name.casefold())[:30]
     if not slug:
         return api_error("Enter a name")
-    return finish_login("dev_" + slug, name, slug[:20])
+    return finish_login("dev_" + slug, name)
 
 
 @app.post("/api/me")
@@ -1045,12 +1238,36 @@ def update_profile():
             if len(avatar_data) > 420000 or not decode_avatar(avatar_data):
                 return api_error("Profile photo must be a JPG, PNG or WebP image under 300 KB")
         fields["avatar"] = avatar_data
+    if "show_active" in d:
+        fields["show_active"] = bool(d.get("show_active"))
+    old_username = info["username"]
+    if "username" in d:
+        new = str(d.get("username") or "").strip().lower()
+        if not valid_username(new):
+            return api_error("Username must be 3-12 characters: small letters, numbers, _ or -")
+        if new != old_username:
+            if not uname_gate.hit(uid, 5, 3600):
+                return api_error("You changed your username too many times. Try again later.", 429)
+            if not store.claim_username(new, uid):
+                return api_error("That username is already taken.")
+            fields["username"] = new
     if not fields:
         return jsonify(me=public_user(uid))
-    store.update_user(key, fields)
+    try:
+        store.update_user(key, fields)
+    except Exception:
+        if fields.get("username"):
+            store.release_username(fields["username"])
+        raise
+    if fields.get("username") and old_username and old_username != fields["username"]:
+        try:
+            store.release_username(old_username)
+        except Exception:
+            log.exception("releasing old username failed")
     with dir_lock:
-        if "name" in fields:
-            info["name"] = fields["name"]
+        for k in ("name", "show_active", "username"):
+            if k in fields:
+                info[k] = fields[k]
         if "avatar" in fields:
             parsed = decode_avatar(fields["avatar"])
             info["avatar_mime"], info["avatar_raw"] = parsed if parsed else (None, None)
@@ -1058,6 +1275,8 @@ def update_profile():
     payload = {"id": uid, "name": info["name"], "username": info["username"], "avatar": avatar_url(uid)}
     for gid in list(user_groups.get(uid, ())):
         socketio.emit("profile_updated", payload, to=room(gid))
+    if "show_active" in fields:
+        emit_user_presence(uid)
     return jsonify(me=public_user(uid))
 
 
@@ -1086,6 +1305,17 @@ def delete_account():
         return api_error('Type DELETE to confirm')
     uid, key = e["uid"], e["key"]
     kick_account(uid, "deleted")
+    with groups_lock:
+        waiting = [gid for gid, g in groups.items() if uid in g["pending"]]
+    for gid in waiting:
+        try:
+            store.remove_pending(gid, uid)
+        except Exception:
+            log.exception("removing pending request failed")
+        with groups_lock:
+            if uid in groups[gid]["pending"]:
+                groups[gid]["pending"].remove(uid)
+    old_username = (directory.get(uid) or {}).get("username")
     for gid in list(user_groups.get(uid, ())):
         try:
             store.delete_messages_by_uid(gid, uid)
@@ -1098,11 +1328,131 @@ def delete_account():
     user_groups.pop(uid, None)
     store.delete_sessions_for_key(key)
     store.delete_user(key)
+    if old_username:
+        try:
+            store.release_username(old_username)
+        except Exception:
+            log.exception("releasing username failed")
     revoke_account_tokens(key)
     with dir_lock:
         directory.pop(uid, None)
         missing_uids.add(uid)
     return jsonify(ok=True)
+
+
+def _auth_json():
+    d = body()
+    e = resolve_token(d.get("token"))
+    if not e or e["uid"] not in directory:
+        return d, None
+    return d, e["uid"]
+
+
+@app.post("/api/wallet")
+def wallet():
+    d, uid = _auth_json()
+    if not uid:
+        return api_error("Session expired. Please sign in again.", 401)
+    log_rows = list(reversed((directory[uid].get("stone_log") or [])[-15:]))
+    return jsonify(me=public_user(uid), log=log_rows)
+
+
+@app.post("/api/buy-slot")
+def buy_slot():
+    d, uid = _auth_json()
+    if not uid:
+        return api_error("Session expired. Please sign in again.", 401)
+    try:
+        stone_change(uid, delta=-GROUP_SLOT_COST, why="Group slot")
+    except ValueError:
+        return api_error("Not enough Stone. You need %d Stone." % GROUP_SLOT_COST, 402)
+    info = directory[uid]
+    info["extra_slots"] += 1
+    store.update_user(info["key"], {"extra_slots": info["extra_slots"]})
+    push_wallet(uid)
+    return jsonify(me=public_user(uid))
+
+
+@app.post("/api/extend-members")
+def extend_members():
+    d, uid = _auth_json()
+    if not uid:
+        return api_error("Session expired. Please sign in again.", 401)
+    gid = str(d.get("gid") or "")[:40]
+    g = groups.get(gid)
+    if not g or g["owner"] != uid:
+        return api_error("Only the group owner can do this.", 403)
+    if g["member_limit"] >= MAX_MEMBER_LIMIT:
+        return api_error("This group is already at the maximum size (%d)." % MAX_MEMBER_LIMIT)
+    try:
+        stone_change(uid, delta=-MEMBER_EXTEND_COST, why="Members +%d (%s)" % (MEMBER_EXTEND_STEP, g["name"][:20]))
+    except ValueError:
+        return api_error("Not enough Stone. You need %d Stone." % MEMBER_EXTEND_COST, 402)
+    new_limit = min(MAX_MEMBER_LIMIT, g["member_limit"] + MEMBER_EXTEND_STEP)
+    store.update_group(gid, {"member_limit": new_limit})
+    g["member_limit"] = new_limit
+    emit_group(gid)
+    return jsonify(me=public_user(uid), group=group_public(gid))
+
+
+def _admin_uid():
+    d, uid = _auth_json()
+    if not uid:
+        return d, None, api_error("Session expired. Please sign in again.", 401)
+    if not is_admin(uid):
+        return d, None, api_error("Admin access only.", 403)
+    if not admin_gate.hit(uid, 120, 60):
+        return d, None, api_error("Too many requests", 429)
+    return d, uid, None
+
+
+def _admin_row(info):
+    return {"id": info["uid"], "name": info["name"], "username": info["username"], "email": info.get("email", ""),
+            "avatar": avatar_url(info["uid"]), "stones": info["stones"], "groups": len(user_groups.get(info["uid"], ()))}
+
+
+@app.post("/api/admin/users")
+def admin_users():
+    d, uid, err = _admin_uid()
+    if err:
+        return err
+    q = clean_spaces(d.get("q")).casefold().lstrip("@")[:60]
+    with dir_lock:
+        rows = list(directory.values())
+    if q:
+        rows = [i for i in rows if q in i["name"].casefold() or q in i["username"] or q in i.get("email", "").casefold()]
+    rows.sort(key=lambda i: (i["name"].casefold(), i["username"]))
+    return jsonify(total=len(directory), users=[_admin_row(i) for i in rows[:40]])
+
+
+@app.post("/api/admin/stone")
+def admin_stone():
+    d, uid, err = _admin_uid()
+    if err:
+        return err
+    target = str(d.get("uid") or "")[:64]
+    if target not in directory:
+        return api_error("User not found", 404)
+    op = d.get("op")
+    try:
+        amount = int(d.get("amount"))
+    except (TypeError, ValueError):
+        return api_error("Enter a whole number.")
+    if abs(amount) > 1_000_000 or op not in ("add", "set"):
+        return api_error("Invalid amount.")
+    note = clean_spaces(d.get("note"))[:30]
+    why = "Admin " + ("adjustment" if op == "add" else "set") + (" - " + note if note else "")
+    try:
+        if op == "add":
+            stone_change(target, delta=amount, why=why)
+        else:
+            if amount < 0:
+                return api_error("Balance cannot be negative.")
+            stone_change(target, set_to=amount, why=why)
+    except ValueError:
+        return api_error("This would make the balance negative.")
+    log.info("admin %s: %s %s %s -> %s", directory[uid]["username"], op, amount, directory[target]["username"], directory[target]["stones"])
+    return jsonify(user=_admin_row(directory[target]))
 
 
 # --------------------------------------------------------------------------- Socket.IO events
@@ -1132,79 +1482,281 @@ def on_disconnect(*args):
         emit_user_presence(user["uid"])
 
 
+def _fail(msg, code=None):
+    return {"ok": False, "error": msg, **({"code": code} if code else {})}
+
+
+def join_or_request(uid, gid):
+    """Join a group, or ask its owner when approval is on. Returns an ack dict."""
+    g = groups[gid]
+    if uid in g["members"]:
+        return {"ok": True, "status": "member", "group": group_public(gid)}
+    if len(g["members"]) >= g["member_limit"]:
+        return _fail("This group is full.")
+    if len(user_groups.get(uid, ())) >= MAX_GROUPS_JOINED:
+        return _fail("You have reached the group limit.")
+    if g["approval"]:
+        if uid in g["pending"]:
+            return {"ok": True, "status": "pending", "name": g["name"]}
+        if len(g["pending"]) >= MAX_PENDING:
+            return _fail("This group has too many pending requests. Try again later.")
+        store.add_pending(gid, uid)
+        with groups_lock:
+            g["pending"].append(uid)
+        info = directory.get(uid) or {}
+        for sid in sids_of(g["owner"]):
+            socketio.emit("join_request", {"gid": gid, "group": g["name"], "name": info.get("name", "Someone")}, to=sid)
+        emit_group(gid)
+        return {"ok": True, "status": "pending", "name": g["name"]}
+    member_add(gid, uid)
+    enter_user_rooms(uid, gid)
+    emit_group(gid)
+    return {"ok": True, "status": "joined", "group": group_public(gid)}
+
+
 @socketio.on("create_group")
 def on_create_group(data=None):
     u = current_socket_user()
     if not u:
-        return {"ok": False, "error": "Session expired. Please sign in again."}
+        return _fail("Session expired. Please sign in again.")
     uid = u["uid"]
     name = clean_spaces((data or {}).get("name") if isinstance(data, dict) else "")
     if not name or len(name) > 40:
-        return {"ok": False, "error": "Group name is required (maximum 40 characters)."}
+        return _fail("Group name is required (maximum 40 characters).")
     if not group_gate.hit(uid, 6, 60):
-        return {"ok": False, "error": "Please wait a moment before creating another group."}
+        return _fail("Please wait a moment before creating another group.")
     with groups_lock:
-        owned = sum(1 for gid in user_groups.get(uid, ()) if groups.get(gid, {}).get("owner") == uid)
-        if owned >= MAX_GROUPS_OWNED:
-            return {"ok": False, "error": "You can own up to %d groups." % MAX_GROUPS_OWNED}
+        if owned_count(uid) >= slot_limit(uid):
+            return _fail("You can create %d groups for free. Unlock one more group slot with %d Stone." % (FREE_GROUPS, GROUP_SLOT_COST), "slots")
         gid, code = uuid.uuid4().hex, new_code()
-    doc = {"name": name, "code": code, "owner": uid, "members": [uid], "created_at": now_ms()}
+    doc = {"name": name, "code": code, "owner": uid, "members": [uid], "created_at": now_ms(),
+           "approval": False, "public": True, "member_limit": BASE_MEMBER_LIMIT, "pending": []}
     try:
         store.create_group(gid, doc)
     except Exception:
         log.exception("create_group failed")
-        return {"ok": False, "error": "Could not create the group. Please try again."}
+        return _fail("Could not create the group. Please try again.")
     register_group(gid, doc)
     join_room(room(gid))
-    return {"ok": True, "group": group_public(gid)}
+    return {"ok": True, "group": group_public(gid), "me": public_user(uid)}
 
 
 @socketio.on("join_group")
 def on_join_group(data=None):
     u = current_socket_user()
     if not u:
-        return {"ok": False, "error": "Session expired. Please sign in again."}
+        return _fail("Session expired. Please sign in again.")
     uid = u["uid"]
     if not join_gate.hit(uid, 8, 60):
-        return {"ok": False, "error": "Too many attempts. Please wait a minute."}
+        return _fail("Too many attempts. Please wait a minute.")
     raw = (data or {}).get("code") if isinstance(data, dict) else ""
     code = re.sub(r"[^A-Za-z0-9]", "", str(raw or "")).upper()[:12]
     gid = group_by_code.get(code)
     if not code or not gid or gid not in groups:
-        return {"ok": False, "error": "No group found with that invite code."}
-    g = groups[gid]
-    if uid in g["members"]:
-        join_room(room(gid))
-        return {"ok": True, "group": group_public(gid), "already": True}
-    if len(g["members"]) >= MAX_MEMBERS:
-        return {"ok": False, "error": "This group is full."}
-    if len(user_groups.get(uid, ())) >= MAX_GROUPS_JOINED:
-        return {"ok": False, "error": "You have reached the group limit."}
+        return _fail("No group found with that invite code.")
     try:
-        member_add(gid, uid)
+        return join_or_request(uid, gid)
     except Exception:
         log.exception("join_group failed")
-        return {"ok": False, "error": "Could not join the group. Please try again."}
-    join_room(room(gid))
+        return _fail("Could not join the group. Please try again.")
+
+
+@socketio.on("request_join")
+def on_request_join(data=None):
+    """Join (or ask to join) a group found through search."""
+    u = current_socket_user()
+    if not u:
+        return _fail("Session expired. Please sign in again.")
+    uid = u["uid"]
+    if not join_gate.hit(uid, 8, 60):
+        return _fail("Too many attempts. Please wait a minute.")
+    gid = str((data or {}).get("gid") or "")[:40] if isinstance(data, dict) else ""
+    g = groups.get(gid)
+    if not g or (not g["public"] and uid not in g["members"]):
+        return _fail("This group was not found.")
+    try:
+        return join_or_request(uid, gid)
+    except Exception:
+        log.exception("request_join failed")
+        return _fail("Could not send the request. Please try again.")
+
+
+@socketio.on("search_groups")
+def on_search_groups(data=None):
+    u = current_socket_user()
+    if not u:
+        return _fail("Session expired. Please sign in again.")
+    uid = u["uid"]
+    q = clean_spaces((data or {}).get("q") if isinstance(data, dict) else "")[:40].casefold()
+    if len(q) < 2:
+        return {"ok": True, "results": []}
+    if not search_gate.hit(uid, 40, 60):
+        return _fail("Too many searches. Please wait a moment.")
+    with groups_lock:
+        items = list(groups.values())
+    out = []
+    for g in items:
+        if q not in g["name"].casefold() or (not g["public"] and uid not in g["members"]):
+            continue
+        if uid in g["members"]:
+            status = "member"
+        elif uid in g["pending"]:
+            status = "pending"
+        elif len(g["members"]) >= g["member_limit"]:
+            status = "full"
+        else:
+            status = "approval" if g["approval"] else "open"
+        out.append({"id": g["id"], "name": g["name"], "avatar": group_avatar_url(g), "members": len(g["members"]),
+                    "limit": g["member_limit"], "status": status})
+    out.sort(key=lambda r: (not r["name"].casefold().startswith(q), -r["members"], r["name"].casefold()))
+    return {"ok": True, "results": out[:20]}
+
+
+def _owner_group(data):
+    """(user, gid) when the caller is the owner of the group named in `data`; otherwise (None, error-ack)."""
+    u = current_socket_user()
+    if not u:
+        return None, _fail("Session expired. Please sign in again.")
+    gid = str((data or {}).get("gid") or "")[:40] if isinstance(data, dict) else ""
+    g = groups.get(gid)
+    if not g or g["owner"] != u["uid"]:
+        return None, _fail("Only the group owner can do this.")
+    return (u, gid), None
+
+
+@socketio.on("get_requests")
+def on_get_requests(data=None):
+    ctx, err = _owner_group(data)
+    if err:
+        return err
+    gid = ctx[1]
+    rows = []
+    for uid in list(groups[gid]["pending"]):
+        info = directory.get(uid) or info_for(uid)
+        if info:
+            rows.append({"id": uid, "name": info["name"], "username": info["username"], "avatar": avatar_url(uid)})
+    return {"ok": True, "requests": rows}
+
+
+@socketio.on("resolve_request")
+def on_resolve_request(data=None):
+    ctx, err = _owner_group(data)
+    if err:
+        return err
+    gid = ctx[1]
+    g = groups[gid]
+    target = str((data or {}).get("uid") or "")[:64]
+    approve = bool((data or {}).get("approve"))
+    if target not in g["pending"]:
+        return {"ok": True}
+    if approve and len(g["members"]) >= g["member_limit"]:
+        return _fail("The group is full. Extend the member limit first.", "full")
+    try:
+        store.remove_pending(gid, target)
+        with groups_lock:
+            if target in g["pending"]:
+                g["pending"].remove(target)
+        if approve:
+            member_add(gid, target)
+            enter_user_rooms(target, gid)
+    except Exception:
+        log.exception("resolve_request failed")
+        return _fail("Could not update the request. Please try again.")
+    for sid in sids_of(target):
+        if approve:
+            socketio.emit("group_joined", group_public(gid), to=sid)
+        else:
+            socketio.emit("join_declined", {"gid": gid, "name": g["name"]}, to=sid)
     emit_group(gid)
+    return {"ok": True}
+
+
+@socketio.on("update_group")
+def on_update_group(data=None):
+    ctx, err = _owner_group(data)
+    if err:
+        return err
+    gid = ctx[1]
+    g = groups[gid]
+    d = data
+    fields = {}
+    if "name" in d:
+        name = clean_spaces(d.get("name"))
+        if not name or len(name) > 40:
+            return _fail("Group name is required (maximum 40 characters).")
+        fields["name"] = name
+    if "avatar" in d:
+        av = str(d.get("avatar") or "")
+        if av and (len(av) > 420000 or not decode_avatar(av)):
+            return _fail("Group logo must be a JPG, PNG or WebP image under 300 KB.")
+        fields["avatar"] = av
+    for k in ("approval", "public"):
+        if k in d:
+            fields[k] = bool(d.get(k))
+    if fields:
+        try:
+            store.update_group(gid, fields)
+        except Exception:
+            log.exception("update_group failed")
+            return _fail("Could not save the changes. Please try again.")
+        with groups_lock:
+            for k, v in fields.items():
+                if k == "avatar":
+                    _set_group_avatar(g, v)
+                else:
+                    g[k] = v
+        emit_group(gid)
     return {"ok": True, "group": group_public(gid)}
+
+
+@socketio.on("delete_group")
+def on_delete_group(data=None):
+    ctx, err = _owner_group(data)
+    if err:
+        return err
+    gid = ctx[1]
+    g = groups[gid]
+    try:
+        store.delete_group(gid)
+    except Exception:
+        log.exception("delete_group failed")
+        return _fail("Could not delete the group. Please try again.")
+    with online_lock:
+        c = calls.pop(gid, None)
+        for s in (c or {}).get("sids", ()):
+            sid_call.pop(s, None)
+    socketio.emit("group_deleted", {"gid": gid, "name": g["name"]}, to=room(gid))
+    socketio.close_room(room(gid))
+    with groups_lock:
+        groups.pop(gid, None)
+        group_by_code.pop(g["code"], None)
+        gmsgs.pop(gid, None)
+        for m in g["members"]:
+            user_groups[m].discard(gid)
+    for m in g["members"]:
+        push_wallet(m)
+    return {"ok": True}
 
 
 @socketio.on("leave_group")
 def on_leave_group(data=None):
     u = current_socket_user()
     if not u:
-        return {"ok": False, "error": "Session expired. Please sign in again."}
+        return _fail("Session expired. Please sign in again.")
     gid = member_gid(u, data)
     if not gid:
         return {"ok": True}
+    if groups[gid]["owner"] == u["uid"]:
+        return _fail("The group owner cannot leave. Delete the group instead.")
     if sid_call.get(request.sid) == gid:
         leave_call(request.sid, u["uid"])
+    name = (directory.get(u["uid"]) or {}).get("name", "A member")
+    system_message(gid, "%s left the group" % name)
     try:
         alive = member_remove(gid, u["uid"])
     except Exception:
         log.exception("leave_group failed")
-        return {"ok": False, "error": "Could not leave the group. Please try again."}
+        return _fail("Could not leave the group. Please try again.")
     leave_room(room(gid))
     if alive:
         emit_group(gid)

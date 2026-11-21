@@ -5,21 +5,22 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
 <meta name="theme-color" content="#202c33">
 <meta name="color-scheme" content="dark light">
-<meta name="description" content="{{ room_title }} - private group chat and video calls">
+<meta name="description" content="{{ room_title }} - anonymous group chat and video calls">
 <title>{{ room_title }}</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%230a8f76'/%3E%3Cstop offset='1' stop-color='%2300a884'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='url(%23g)'/%3E%3Ctext x='32' y='42' font-family='Arial' font-size='26' font-weight='900' text-anchor='middle' fill='white'%3ESR%3C/text%3E%3C/svg%3E">
+<link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
 <link rel="stylesheet" href="{{ asset('css/app.css') }}">
 <script nonce="{{ nonce }}">try{var t=localStorage.getItem('sr_theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
 <script src="{{ asset('js/socket.io.min.js') }}" defer></script>
 <script src="{{ asset('js/app.js') }}" defer></script>
 </head>
 <body>
-<div class="splash" id="splash"><div class="logo">SR</div></div>
+<div class="splash" id="splash"><img class="logo-img big" src="{{ url_for('static', filename='logo.png') }}" alt="" width="46" height="46"></div>
 
 <!-- ============ Sign in / Create account ============ -->
 <main class="auth" id="auth" hidden>
   <section class="auth-hero">
-    <div class="brand"><div class="logo">SR</div><span>{{ room_title }}</span></div>
+    <div class="brand"><img class="logo-img" src="{{ url_for('static', filename='logo.png') }}" alt="" width="46" height="46"><span>{{ room_title }}</span></div>
     <div class="eyebrow">Private community</div>
     <h1>Talk, call and stay <em>connected</em>.</h1>
     <p>A private space for your people: real-time group chat, crystal-clear video calls and a profile that is truly yours.</p>
@@ -48,8 +49,8 @@
 <div class="app" id="app" hidden>
   <aside class="sidebar" id="sidebar" aria-label="Chats">
     <div class="side-head">
-      <div class="logo round">SR</div>
-      <div style="min-width:0"><b>{{ room_title }}</b><small>Private community</small></div>
+      <img class="logo-img side" src="{{ url_for('static', filename='logo.png') }}" alt="" width="46" height="46">
+      <div style="min-width:0"><b>{{ room_title }}</b><small>Private groups &amp; calls</small></div>
       <button class="icon-btn newgrp" id="newGroupBtn" type="button" aria-label="New group or join" title="New group / Join"><span class="ico" data-ico="plus"></span></button>
       <button class="icon-btn" id="sideClose" type="button" aria-label="Close menu"><span class="ico" data-ico="close"></span></button>
     </div>
@@ -72,7 +73,7 @@
 
     <div class="welcome" id="welcome" hidden>
       <div class="w-card">
-        <div class="logo round big">SR</div>
+        <img class="logo-img big" src="{{ url_for('static', filename='logo.png') }}" alt="" width="46" height="46">
         <h2 id="welcomeTitle">Start your first group</h2>
         <p id="welcomeText">Create a private group and share its invite code, or join a friend's group with their code.</p>
         <div class="row"><button class="btn primary lg" id="wCreate" type="button"><span class="ico" data-ico="plus"></span>Create group</button><button class="btn lg" id="wJoin" type="button"><span class="ico" data-ico="users"></span>Join with code</button></div>
@@ -98,22 +99,41 @@
           <div class="cover"></div>
           <div class="acc-id">
             <div class="avatar-wrap"><div class="avatar xl" id="accAvatar"></div><button class="cam-btn" id="accPhotoBtn" type="button" aria-label="Change profile photo"><span class="ico" data-ico="camera"></span></button></div>
-            <div class="who"><h2 id="accName"></h2><p>Google account</p><span class="pill ok"><span class="dot"></span>Online</span></div>
+            <div class="who"><h2 id="accName"></h2><p id="accHandle">@username</p><span class="pill ok" id="accPill"><span class="dot"></span>Online</span></div>
             <button class="btn" id="signOutBtn" type="button"><span class="ico" data-ico="logout"></span>Sign out</button>
           </div>
         </div>
         <div class="acc-grid">
           <section class="card">
-            <h3>Profile</h3><p class="d">This name is shown to everyone in the chat and in calls.</p>
+            <h3>Profile</h3><p class="d">Your display name and username are shown in chats and calls.</p>
             <form id="nameForm" novalidate>
               <label class="field"><span>Display name</span><input id="accNameInput" maxlength="40" autocomplete="name"></label>
-              <button class="btn primary" id="nameSave" type="submit"><span class="spin"></span><span class="label">Save changes</span></button>
+              <button class="btn primary" id="nameSave" type="submit"><span class="spin"></span><span class="label">Save name</span></button>
             </form>
+            <form id="unameForm" novalidate style="margin-top:20px">
+              <label class="field"><span>Username</span><div class="at-input"><i>@</i><input id="accUnameInput" maxlength="12" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="username"></div></label>
+              <p class="hint">3-12 characters. Small letters, numbers, <b>_</b> and <b>-</b> only. Must be unique.</p>
+              <button class="btn primary" id="unameSave" type="submit"><span class="spin"></span><span class="label">Save username</span></button>
+            </form>
+          </section>
+          <section class="card wallet">
+            <h3>Stone wallet</h3><p class="d">Stone unlocks extra groups and bigger member limits.</p>
+            <div class="bal"><span class="gem" aria-hidden="true"></span><b id="walletBal">0</b><small>Stone</small></div>
+            <div class="row"><button class="btn primary" id="buyStoneBtn" type="button"><span class="ico" data-ico="gem"></span>Buy Stone</button><button class="btn" id="historyBtn" type="button">History</button></div>
+            <p class="hint" id="walletHint"></p>
+          </section>
+          <section class="card">
+            <h3>Privacy</h3><p class="d">Control what other members can see.</p>
+            <label class="switch-row"><span><b>Show when I am active</b><small>When off, you appear offline to everyone.</small></span><span class="switch"><input type="checkbox" id="activeSwitch"><i></i></span></label>
           </section>
           <section class="card">
             <h3>Profile photo</h3><p class="d">JPG, PNG or WebP. Your photo is cropped to a square and optimised automatically.</p>
             <div class="row"><button class="btn primary" id="uploadBtn" type="button"><span class="ico" data-ico="camera"></span>Upload photo</button><button class="btn" id="removePhotoBtn" type="button">Remove</button></div>
             <input id="avatarFile" type="file" accept="image/jpeg,image/png,image/webp,image/*" hidden>
+          </section>
+          <section class="card" id="adminCard" hidden>
+            <h3>Admin</h3><p class="d">Add or edit users' Stone.</p>
+            <button class="btn primary" id="adminOpenBtn" type="button"><span class="ico" data-ico="shield"></span>Open admin panel</button>
           </section>
           <section class="card">
             <h3>Sign-in</h3><p class="d">You sign in with your Google account, so there is no password to manage here.</p>
@@ -129,6 +149,19 @@
             <h3>Delete account</h3><p class="d">Permanently deletes your account, sessions and all of your messages in every group. This cannot be undone.</p>
             <button class="btn danger" id="deleteBtn" type="button"><span class="ico" data-ico="trash"></span>Delete my account</button>
           </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- Admin panel -->
+    <div class="account" id="adminView" hidden>
+      <div class="acc-wrap">
+        <button class="btn ghost" id="adminBack" type="button"><span class="ico" data-ico="back"></span>Back to profile</button>
+        <div class="card admin">
+          <h3>Admin panel</h3><p class="d">Search a user, then add or set their Stone balance. Changes apply instantly.</p>
+          <div class="search-box"><span class="ico" data-ico="search"></span><input id="adminSearch" placeholder="Search name, @username or email" autocomplete="off"></div>
+          <p class="hint" id="adminCount"></p>
+          <ul class="admin-list" id="adminList"></ul>
         </div>
       </div>
     </div>
